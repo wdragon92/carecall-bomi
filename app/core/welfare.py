@@ -33,6 +33,16 @@ def get_digest(max_items: int = 12) -> str:
     return "\n".join(lines)
 
 
+def by_ids(ids: list[str]) -> list[dict]:
+    index = {it.id: it for it in load_items()}
+    out: list[dict] = []
+    for i in ids:
+        it = index.get(i)
+        if it:
+            out.append({"id": it.id, "이름": it.이름, "한줄": it.한줄, "신청처": it.신청처})
+    return out
+
+
 def match(signals: list[str], text: str) -> list[dict]:
     """추출 신호 + 사용자 발화 키워드로 복지 항목 매칭. LLM 없이 동작하는 결정적 규칙."""
     items = load_items()

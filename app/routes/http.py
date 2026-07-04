@@ -139,3 +139,26 @@ async def synth_tts(sid: str, request: Request):
 
     media = "audio/wav" if audio[:4] == b"RIFF" else "audio/mpeg"
     return Response(content=audio, media_type=media)
+
+
+@router.post("/api/sessions/{sid}/end")
+async def end_session(sid: str, request: Request) -> dict:
+    store = request.app.state.store
+    providers = request.app.state.providers
+
+    sess = store.get(sid)
+    if sess is None:
+        raise HTTPException(status_code=404, detail="session not found")
+
+    # 리포트 전 특이사항 1회 flush (최신 상태 반영)
+    try:
+        from app.core.extraction import trigger_extract
+
+        await trigger_extract(sess, providers)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("pre-report extract failed: %s", exc)
+
+    from app.core.report import generate_report
+
+    report = await generate_report(sess, providers)
+    return {"report": report}
