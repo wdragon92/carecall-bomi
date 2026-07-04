@@ -27,10 +27,8 @@ async def ws_endpoint(websocket: WebSocket, session_id: str) -> None:
         return
 
     sess.ws = websocket
-    await websocket.send_json(
-        {"type": "session_ready", "session_id": session_id, "providers": providers.modes}
-    )
-    await conversation.greet(sess, websocket)
+    await sess.send({"type": "session_ready", "session_id": session_id, "providers": providers.modes})
+    await conversation.greet(sess)
 
     try:
         while True:
@@ -41,7 +39,7 @@ async def ws_endpoint(websocket: WebSocket, session_id: str) -> None:
                 if not text:
                     continue
                 sess.add_message("user", text, via=data.get("via", "text"))
-                await conversation.handle_turn(sess, websocket, providers, settings)
+                await conversation.handle_turn(sess, providers, settings)
             elif mtype == "set_voice":
                 sess.voice_on = bool(data.get("on"))
     except WebSocketDisconnect:
@@ -50,9 +48,4 @@ async def ws_endpoint(websocket: WebSocket, session_id: str) -> None:
         log.info("ws disconnected: %s", session_id)
     except Exception as exc:  # noqa: BLE001 — 세션은 절대 죽이지 않음
         log.exception("ws error: %s", exc)
-        try:
-            await websocket.send_json(
-                {"type": "error", "code": "internal", "message": "일시적인 오류가 있었어요."}
-            )
-        except Exception:
-            pass
+        await sess.send({"type": "error", "code": "internal", "message": "일시적인 오류가 있었어요."})

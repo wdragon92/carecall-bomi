@@ -18,7 +18,8 @@ def _last_user(messages: list[dict]) -> str:
 
 
 def _all_user_text(messages: list[dict]) -> str:
-    parts = [m.get("content", "") for m in messages if m.get("role") in ("user", "system")]
+    # 사용자 발화만 스캔 (system=지시 프롬프트라 키워드 오탐 유발)
+    parts = [m.get("content", "") for m in messages if m.get("role") == "user"]
     return " ".join(parts)
 
 

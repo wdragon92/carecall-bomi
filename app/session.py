@@ -33,10 +33,31 @@ class Session:
         self.extract_dirty = False
         self.voice_on = True
         self.ws = None  # 활성 WebSocket (있으면)
+        self.send_lock = asyncio.Lock()  # WS 동시 전송 직렬화
+        self.bg_tasks: set = set()  # 백그라운드 태스크(추출 등) 참조 유지
         self._mcount = 0
 
     def touch(self) -> None:
         self.last_active = time.monotonic()
+
+    async def send(self, payload: dict) -> bool:
+        """활성 WS로 안전하게 전송(직렬화). 실패해도 세션은 죽지 않음."""
+        ws = self.ws
+        if ws is None:
+            return False
+        async with self.send_lock:
+            try:
+                await ws.send_json(payload)
+                return True
+            except Exception:
+                return False
+
+    def spawn(self, coro):
+        """세션 수명 동안 유지되는 백그라운드 태스크 생성."""
+        task = asyncio.create_task(coro)
+        self.bg_tasks.add(task)
+        task.add_done_callback(self.bg_tasks.discard)
+        return task
 
     def add_message(self, role: str, text: str, via: str = "text", id: str | None = None) -> Message:
         self._mcount += 1
@@ -57,6 +78,7 @@ class Session:
         return [{"role": m.role, "content": m.text} for m in msgs]
 
     def transcript_text(self, max_chars: int = 6000) -> str:
+        """전체 대화(사용자+상담원). 리포트 생성용."""
         lines = []
         for m in self.messages:
             if m.role == "system":
@@ -67,6 +89,13 @@ class Session:
             lines.append(f"[첨부문서]: {t}")
         text = "\n".join(lines)
         return text[-max_chars:]
+
+    def user_transcript(self, max_chars: int = 6000) -> str:
+        """어르신 발화 + 첨부문서만. 특이사항 추출용 (AI 발화/인사에서 오탐 방지)."""
+        lines = [f"어르신: {m.text}" for m in self.messages if m.role == "user"]
+        for t in self.ocr_texts:
+            lines.append(f"[첨부문서]: {t}")
+        return "\n".join(lines)[-max_chars:]
 
 
 class SessionStore:
