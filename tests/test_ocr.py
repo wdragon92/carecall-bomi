@@ -1,4 +1,4 @@
-def _drain_until(ws, pred, max_msgs=50):
+def _drain_until(ws, pred, max_msgs=90):
     seen = []
     for _ in range(max_msgs):
         m = ws.receive_json()

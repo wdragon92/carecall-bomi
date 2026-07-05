@@ -51,7 +51,11 @@ function handleWS(m) {
     case "session_ready":
       showModes(m.providers);
       break;
+    case "ai_typing":
+      m.on ? showTyping() : hideTyping();
+      break;
     case "ai_message_start":
+      hideTyping();
       startAiBubble(m.id);
       break;
     case "ai_message_delta":
@@ -59,7 +63,7 @@ function handleWS(m) {
       break;
     case "ai_message_end":
       endAiBubble(m.id, m.full_text);
-      if (state.voiceOn && m.full_text) playTTS(m.id);
+      if (state.voiceOn && m.full_text) enqueueTTS(m.id);
       break;
     case "findings_update":
       renderFindings(m.findings);
@@ -68,7 +72,7 @@ function handleWS(m) {
       renderWelfare(m.items);
       break;
     case "urgent_alert":
-      showUrgent(m.message);
+      showUrgent(m.message, m.level);
       break;
     case "ocr_status":
       if (m.status === "error") toast("사진에서 글자를 읽지 못했어요.");
@@ -143,6 +147,18 @@ function endAiBubble(id, full) {
   delete state.streams[id];
   scrollDown();
 }
+function showTyping() {
+  if (document.getElementById("typing-row")) return;
+  const row = rowFor("ai");
+  row.id = "typing-row";
+  row.innerHTML = `<div class="bubble bubble-ai"><span class="typing-dots"><i></i><i></i><i></i></span></div>`;
+  chatLog().appendChild(row);
+  scrollDown();
+}
+function hideTyping() {
+  const r = document.getElementById("typing-row");
+  if (r) r.remove();
+}
 
 /* ================= 특이사항 / 복지 패널 ================= */
 const CAT_ICON = { 건강: "🩺", 정서: "💗", 인지: "🧩", 사기_노출: "⚠️", 복지_니즈: "🤝", 긴급: "🚨" };
@@ -194,10 +210,15 @@ function renderWelfare(items) {
   }
   flashMobileBadge();
 }
-function showUrgent(msg) {
+function showUrgent(msg, level) {
   const b = $("#urgent-banner");
-  b.textContent = "🚨 " + msg;
-  b.classList.remove("hidden");
+  level = level === "warning" ? "warning" : "emergency";
+  // 응급(빨강)이 이미 떠 있으면 경고(주황)로 낮추지 않음
+  if (b.dataset.level === "emergency" && level !== "emergency") return;
+  b.dataset.level = level;
+  b.classList.remove("hidden", "bg-red-600", "bg-amber-500");
+  b.classList.add(level === "warning" ? "bg-amber-500" : "bg-red-600");
+  b.textContent = (level === "warning" ? "⚠️ " : "🚨 ") + msg;
 }
 
 /* ================= 입력: 텍스트 ================= */
@@ -343,20 +364,38 @@ function downscaleImage(file, maxDim, quality) {
   });
 }
 
-/* ================= TTS 재생 ================= */
-async function playTTS(messageId) {
+/* ================= TTS 재생 (말풍선 순서대로 순차 재생 큐) ================= */
+function enqueueTTS(id) {
+  if (!state.voiceOn) return;
+  state.ttsChain = (state.ttsChain || Promise.resolve()).then(() => playTTSOnce(id)).catch(() => {});
+}
+async function playTTSOnce(id) {
+  if (!state.voiceOn) return;
+  let blob;
   try {
     const r = await fetch(`/api/sessions/${state.sessionId}/tts`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message_id: messageId }),
+      body: JSON.stringify({ message_id: id }),
     });
     if (!r.ok) return;
-    const blob = await r.blob();
-    if (state.audio) state.audio.pause();
-    state.audio = new Audio(URL.createObjectURL(blob));
-    state.audio.play().catch(() => {});
-  } catch (e) {}
+    blob = await r.blob();
+  } catch (e) {
+    return;
+  }
+  if (!state.voiceOn) return;
+  await new Promise((resolve) => {
+    try {
+      if (state.audio) state.audio.pause();
+      const a = new Audio(URL.createObjectURL(blob));
+      state.audio = a;
+      a.onended = resolve;
+      a.onerror = resolve;
+      a.play().catch(() => resolve());
+    } catch (e) {
+      resolve();
+    }
+  });
 }
 
 /* ================= 종료 리포트 ================= */

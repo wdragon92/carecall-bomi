@@ -26,14 +26,18 @@ def _fallback_report(sess):
         summary = "이번 상담에서는 특별한 특이사항이 관찰되지 않았습니다. 편안하게 안부를 나눴습니다."
 
     recs: list[str] = []
-    if any(_is_urgent(f) for f in sess.findings):
-        recs.append("위급 신호가 있었습니다. 보호자·담당자 또는 119에 연락해 주세요.")
+    if any(f.category == "긴급" for f in sess.findings):
+        recs.append("위급 신호가 있었습니다. 자살예방상담 109 또는 119, 보호자·담당자에게 즉시 연결해 주세요.")
+    if any(f.category == "건강" and f.severity == "높음" for f in sess.findings):
+        recs.append("건강 위험신호가 관찰되었습니다. 가까운 시일 안에 진료(응급 의심 시 119)를 권합니다.")
+    if any(f.category == "정서" and f.severity == "높음" for f in sess.findings):
+        recs.append("정서적으로 많이 지치신 상태가 관찰됩니다. 자살예방상담 109·정신건강상담 1577-0199 연계와 잦은 안부 연락을 권합니다.")
+    elif any(f.category == "정서" for f in sess.findings):
+        recs.append("정기적인 안부 연락이 정서적 안정에 도움이 됩니다.")
     if any(f.category == "복지_니즈" for f in sess.findings):
         recs.append("복지로(129)나 주민센터에서 받을 수 있는 복지 상담을 권합니다.")
     if any(f.category == "사기_노출" for f in sess.findings):
         recs.append("의심 전화·문자에 유의하시도록 다시 한번 안내가 필요합니다.")
-    if any(f.category == "정서" for f in sess.findings):
-        recs.append("정기적인 안부 연락이 정서적 안정에 도움이 됩니다.")
     if not recs:
         recs.append("특이사항은 없었지만, 정기적인 안부 확인을 권합니다.")
     return summary, recs

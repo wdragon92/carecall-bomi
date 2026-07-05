@@ -23,6 +23,10 @@
     @keyframes blink { to { visibility: hidden; } }
     .newcard { animation: pop .5s ease; }
     @keyframes pop { from { transform: scale(.96); background: #fef9c3; } to { transform: scale(1); } }
+    .typing-dots i { display:inline-block; width:8px; height:8px; margin:0 2px; background:#9ca3af; border-radius:50%; animation: td 1.2s infinite ease-in-out both; }
+    .typing-dots i:nth-child(1){ animation-delay:-.24s; }
+    .typing-dots i:nth-child(2){ animation-delay:-.12s; }
+    @keyframes td { 0%,80%,100%{ transform: scale(.6); opacity:.4; } 40%{ transform: scale(1); opacity:1; } }
     ::-webkit-scrollbar { width: 10px; }
     ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 8px; }
   </style>

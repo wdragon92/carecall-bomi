@@ -1,0 +1,126 @@
+"""결정적 위험신호 안전망 (safety net).
+LLM 추출이 놓쳐도 코드가 반드시 잡는 규칙 기반 탐지 — 생명/건강 관련이라 확률모델에만 의존하지 않는다.
+근거: 조사(질병관리청·대한뇌졸중학회·서울아산병원, 보건복지부 자살예방/109 통합) +
+docs/health_potential_danger-gemini_research.txt(노인 비전형 증상: 무증상 심근경색, 탈수-요로감염-섬망,
+노인 폐렴, 고관절 골절 지연, 가면성 우울/가성치매).
+어르신 발화만 대상. 진단이 아니라 '관찰 + 권고'."""
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+# 매칭 직후 이어지는 부정 표현(오탐 방지): "가슴이 답답하진 않아", "죽고 싶지 않아"
+_NEG = ("않", "없", "아니")
+
+
+@dataclass(frozen=True)
+class Rule:
+    kind: str  # medical_emergency | medical_soon | suicide_acute | suicide_warning | mood_low
+    category: str  # 건강 | 긴급 | 정서
+    severity: str  # 높음 | 보통
+    needs_human: bool
+    content: str
+    phrases: tuple[str, ...]
+
+
+RULES: tuple[Rule, ...] = (
+    # ── 의료 응급 (T1 → 즉시 119) ──
+    Rule("medical_emergency", "건강", "높음", True, "응급 의심 신호(뇌졸중 등) — 즉시 119 권고",
+         ("입이 돌아", "얼굴 한쪽", "한쪽이 처", "한쪽 얼굴", "말이 안 나와", "발음이 어눌",
+          "혀가 꼬", "한쪽 팔", "팔에 힘이 없", "팔이 안 올라", "다리가 풀", "한쪽이 마비",
+          "반쪽이 마비", "한쪽 눈이 안 보")),
+    Rule("medical_emergency", "건강", "높음", True, "응급 의심 신호(심장/호흡) — 즉시 119 권고",
+         ("가슴이 쥐어", "가슴을 쥐어", "가슴이 조여", "가슴이 짓눌", "가슴이 터질",
+          "식은땀", "숨이 안 쉬", "숨을 못 쉬", "숨차서 말", "입술이 파래")),
+    Rule("medical_emergency", "건강", "높음", True, "응급 의심 신호(의식/출혈) — 즉시 119 권고",
+         ("쓰러졌", "정신을 잃", "의식을 잃", "깨워도 안", "피를 토", "새까만 변",
+          "짜장 같은", "피가 안 멈", "벼락 맞은", "터질 듯한 두통")),
+    # ── 의료 주의 (T2 → 빠른 진료). 비전형 증상 포함 ──
+    Rule("medical_soon", "건강", "높음", False, "가슴 불편 반복 — 심장 확인 위해 빠른 진료 권고",
+         ("가슴이 답답", "가슴이 뻐근", "가슴이 뭉근", "가슴이 조이", "계단 오르면 가슴", "가슴이 아파")),
+    Rule("medical_soon", "건강", "높음", False, "호흡이 가쁨 — 심장·폐 확인 진료 권고",
+         ("숨이 차", "숨이 가빠", "조금만 걸어도 숨", "누우면 숨", "숨이 대")),
+    # 무증상 심근경색/심부전 — 소화불량으로 위장 (보고서 핵심)
+    Rule("medical_soon", "건강", "높음", False, "체한 듯한 상복부 불편 — 소화기뿐 아니라 심장 확인 권고",
+         ("명치가 답답", "명치가 체", "체한 것 같", "체한 거 같", "체한 것처럼",
+          "속이 울렁거려 밥", "조금만 먹어도 배가 불", "먹으면 금방 배가 불")),
+    # 탈수-요로감염-섬망 — 갑작스런 혼란 (치매로 오인 금지)
+    Rule("medical_soon", "건강", "높음", False, "갑작스런 혼란·헛것 — 감염/탈수(요로감염) 의심, 빠른 진료 권고",
+         ("헛것이 보", "헛것을 보", "헛소리", "정신이 오락가락", "날짜도 모르", "여기가 어딘",
+          "갑자기 멍해", "정신이 왔다 갔다")),
+    Rule("medical_soon", "건강", "보통", False, "소변 색·냄새 변화 — 탈수/요로감염 의심, 수분·진료 권고",
+         ("소변이 진하", "소변 냄새", "소변이 갈색", "오줌이 진하", "오줌 냄새")),
+    # 노인 폐렴 — 열 없이 기력·식욕 저하
+    Rule("medical_soon", "건강", "높음", False, "열 없이 급격한 기력·식욕 저하 — 감염(폐렴) 의심 진료 권고",
+         ("자꾸 처지고 잠", "잠만 자려", "밥맛이 뚝", "갑자기 기운이 쭉", "종일 멍하고 잠")),
+    # 낙상 → 고관절 골절 지연
+    Rule("medical_soon", "건강", "높음", False, "낙상 후 다리·서혜부 통증 — 고관절 골절 의심, 진료 권고",
+         ("서혜부", "사타구니가 아파", "다리에 힘이 안", "다리가 짧아", "허리를 삐끗", "넘어진 뒤로")),
+    # 어지럼·기타
+    Rule("medical_soon", "건강", "보통", False, "어지럼 — 낙상 위험, 진료 상담 권고",
+         ("어지러", "핑 돌", "눈앞이 캄캄", "휘청", "뱅뱅 도")),
+    Rule("medical_soon", "건강", "보통", False, "신경 쓰이는 건강 신호 — 진료 상담 권고",
+         ("살이 빠", "몸무게가 줄", "며칠째 열", "열이 안 내려", "변이 검", "변에 피",
+          "혈변", "다리가 부", "종아리가 붓")),
+    # ── 자살·자해 즉각 위험 (P0) ──
+    Rule("suicide_acute", "긴급", "높음", True, "자살·자해 즉각 위험 신호 — 즉시 109/119·보호자 연결",
+         ("죽어버", "죽으려", "죽고 싶", "확 죽", "목을 매", "목맬", "뛰어내", "약을 모아",
+          "농약", "번개탄", "손목을 그", "유서", "자는 듯이 갔으면", "먼저 간다", "이제 못 볼")),
+    # ── 자살·자해 경고 (P1: 수동적·완곡·체념) ──
+    Rule("suicide_warning", "정서", "높음", True, "삶에 대한 절망/체념 신호 — 따뜻한 확인 및 상담 연결 권고",
+         ("죽을 때가 됐", "그만 살", "살아서 뭐", "이만하면 됐", "오래 살아 뭐", "없어져도",
+          "없어지는 게 나", "짐이 되", "짐만 되", "먼저 간 사람이 부", "따라가고 싶",
+          "눈 안 떴으면", "안 깨어났으면", "데려가", "여한이 없", "다 정리하고 싶",
+          "늙으면 죽어야", "사는 게 지겹")),
+    # ── 우울·무기력(가면성 우울/가성치매) — 배너 없이 카드로만 관찰 ──
+    Rule("mood_low", "정서", "보통", False, "우울·무기력 신호(신체화 가능) — 정서 지지 및 상담 권고",
+         ("사는 낙이 없", "아무 낙이 없", "만사가 귀찮", "다 소용없", "아무것도 하기 싫",
+          "재미가 하나도 없", "다 부질없")),
+)
+
+
+def _matched(text: str, phrase: str) -> bool:
+    idx = text.find(phrase)
+    while idx != -1:
+        tail = text[idx + len(phrase): idx + len(phrase) + 7]
+        if not any(n in tail for n in _NEG):
+            return True
+        idx = text.find(phrase, idx + 1)
+    return False
+
+
+def scan(text: str) -> list[dict]:
+    """어르신 발화에서 위험신호 탐지. content별 최초 매칭 1건씩 반환.
+    반환 dict는 Finding alias(한글 키) + 내부용 '_kind'."""
+    text = text or ""
+    seen: set[str] = set()
+    out: list[dict] = []
+    for r in RULES:
+        if r.content in seen:
+            continue
+        if any(_matched(text, p) for p in r.phrases):
+            seen.add(r.content)
+            out.append({
+                "카테고리": r.category,
+                "내용": r.content,
+                "심각도": r.severity,
+                "사람_개입_필요": r.needs_human,
+                "_kind": r.kind,
+            })
+    return out
+
+
+def alert(kinds: set[str], llm_serious: bool) -> tuple[str | None, str | None]:
+    """탐지된 kind + LLM 심각신호로 경보 레벨·문구 결정. (level, message).
+    수동적(완곡) 자살신호는 LLM이 '긴급'으로 올려도 warning으로 고정(직접 표현만 emergency).
+    mood_low(우울·무기력)는 배너를 띄우지 않고 카드로만 남긴다."""
+    if "suicide_acute" in kinds:
+        return "emergency", "위급한 신호가 감지됐어요. 지금 자살예방상담 109 또는 119, 곁의 보호자·담당자에게 바로 연결하시길 권해요."
+    if "medical_emergency" in kinds:
+        return "emergency", "응급이 의심되는 몸 신호가 있어요. 지금 바로 119에 연락하시거나 곁의 분께 도움을 청하세요."
+    if "suicide_warning" in kinds:
+        return "warning", "마음이 많이 지치신 것 같아 걱정돼요. 혼자 힘들어하지 마시고, 24시간 자살예방상담 109나 가까운 분과 이야기 나눠보시길 권해요."
+    if "medical_soon" in kinds:
+        return "warning", "몸에 신경 쓰이는 신호가 있어요. 그냥 두지 마시고 가까운 시일 안에 진료를 받아보시길 권해요."
+    if llm_serious:
+        return "emergency", "위급 신호가 감지됐어요. 119 또는 자살예방상담 109, 보호자·담당자 연결을 권고합니다."
+    return None, None
