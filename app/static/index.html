@@ -59,14 +59,14 @@
         <!-- 입력바 -->
         <div class="border-t bg-white p-3">
           <div class="flex items-end gap-2">
-            <button id="btn-mic" class="btn px-3 bg-gray-100 hover:bg-gray-200 shrink-0" title="누르고 말하기">🎤</button>
+            <button id="btn-mic" class="btn px-3 bg-gray-100 hover:bg-gray-200 shrink-0" title="눌러서 말하기 시작, 다시 눌러 전송" aria-pressed="false">🎤</button>
             <button id="btn-attach" class="btn px-3 bg-gray-100 hover:bg-gray-200 shrink-0" title="사진 첨부">📎</button>
             <input id="file-input" type="file" accept="image/*" class="hidden" />
-            <textarea id="text-input" rows="1" placeholder="이곳에 입력하거나 🎤을 누르고 말씀하세요"
+            <textarea id="text-input" rows="1" placeholder="이곳에 입력하거나 🎤을 눌러 말씀하세요"
               class="flex-1 resize-none border rounded-2xl px-4 py-3 text-lg focus:outline-none focus:ring-2 focus:ring-blue-400" style="max-height:120px;"></textarea>
             <button id="btn-send" class="btn px-4 bg-blue-600 text-white hover:bg-blue-700 shrink-0">보내기</button>
           </div>
-          <div id="mic-hint" class="hidden text-center text-red-600 font-semibold mt-2">🔴 녹음 중… (버튼에서 손을 떼면 전송)</div>
+          <div id="mic-hint" class="hidden text-center text-red-600 font-semibold mt-2">🔴 녹음 중… 말씀이 끝나면 🎤 버튼을 다시 눌러 주세요</div>
         </div>
       </section>
 

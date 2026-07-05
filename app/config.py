@@ -36,6 +36,7 @@ class Settings(BaseSettings):
     clova_llm_model: str = "HCX-007"   # 분석(추출/리포트)용 — reasoning
     clova_chat_model: str = "HCX-005"  # 채팅용 — 빠른 스트리밍
     clova_tts_voice: str = "vmikyung"
+    clova_tts_speed: int = 0  # -5(빠름)~10(느림), 0=기본
     max_upload_mb: int = 5
     session_ttl_min: int = 120
     log_level: str = "INFO"

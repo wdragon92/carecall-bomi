@@ -18,6 +18,7 @@ class ClovaTTS:
         self.cid = settings.ncp_apigw_client_id.strip()
         self.csec = settings.ncp_apigw_client_secret.strip()
         self.voice = (settings.clova_tts_voice or "vmikyung").strip()
+        self.speed = int(getattr(settings, "clova_tts_speed", 0))
         self._client = httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=10.0))
 
     async def synthesize(self, text: str) -> bytes:
@@ -30,7 +31,7 @@ class ClovaTTS:
             "speaker": self.voice,
             "text": text[:1900],
             "format": "mp3",
-            "speed": "1",  # 어르신 배려로 살짝 느리게 (양수=느림)
+            "speed": str(self.speed),  # -5(빠름)~10(느림), 0=기본
         }
         try:
             resp = await self._client.post(URL, headers=headers, data=data)

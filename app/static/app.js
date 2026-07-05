@@ -238,32 +238,48 @@ function sendFromInput() {
   inp.style.height = "auto";
 }
 
-/* ================= 입력: 마이크 (푸시투토크, WAV 인코딩) ================= */
-let _stream, _ctx, _proc, _src, _chunks;
+/* ================= 입력: 마이크 (클릭 토글 — 눌러 시작, 다시 눌러 전송) ================= */
+let _stream, _ctx, _proc, _src, _chunks, _recTimer;
+async function toggleRec() {
+  if (state.recPending) return; // 권한 프롬프트 대기 중 중복 클릭 무시
+  if (state.recording) await stopRec();
+  else await startRec();
+}
 async function startRec() {
   if (state.recording) return;
+  state.recPending = true;
   try {
     _stream = await navigator.mediaDevices.getUserMedia({ audio: true });
   } catch (e) {
-    toast("마이크 사용 권한이 필요해요.");
+    state.recPending = false;
+    toast("마이크 사용 권한이 필요해요. 주소창 옆 🔒에서 마이크를 허용해 주세요.");
     return;
   }
+  state.recPending = false;
   state.recording = true;
+  if (state.audio) state.audio.pause(); // 스피커(TTS) 소리가 녹음되지 않게
   $("#mic-hint").classList.remove("hidden");
-  $("#btn-mic").classList.add("bg-red-200");
+  const btn = $("#btn-mic");
+  btn.classList.add("bg-red-200");
+  btn.setAttribute("aria-pressed", "true");
   _ctx = new (window.AudioContext || window.webkitAudioContext)();
+  try { await _ctx.resume(); } catch (e) {}
   _src = _ctx.createMediaStreamSource(_stream);
   _proc = _ctx.createScriptProcessor(4096, 1, 1);
   _chunks = [];
   _proc.onaudioprocess = (e) => _chunks.push(new Float32Array(e.inputBuffer.getChannelData(0)));
   _src.connect(_proc);
   _proc.connect(_ctx.destination);
+  _recTimer = setTimeout(() => { if (state.recording) stopRec(); }, 30000); // 최대 30초(CSR 60초 제한 대비)
 }
 async function stopRec() {
   if (!state.recording) return;
   state.recording = false;
+  clearTimeout(_recTimer);
   $("#mic-hint").classList.add("hidden");
-  $("#btn-mic").classList.remove("bg-red-200");
+  const btn = $("#btn-mic");
+  btn.classList.remove("bg-red-200");
+  btn.setAttribute("aria-pressed", "false");
   try {
     _proc.disconnect();
     _src.disconnect();
@@ -272,7 +288,7 @@ async function stopRec() {
   const sr = _ctx.sampleRate;
   const flat = flatten(_chunks);
   try { await _ctx.close(); } catch (e) {}
-  if (flat.length < sr * 0.3) { toast("너무 짧아요. 조금 더 길게 말씀해 주세요."); return; }
+  if (flat.length < sr * 0.3) { toast("말씀이 너무 짧았어요. 🎤을 누르고 말씀하신 뒤 다시 눌러 주세요."); return; }
   const wav = encodeWAV(downsample(flat, sr, 16000), 16000);
   const fd = new FormData();
   fd.append("file", new Blob([wav], { type: "audio/wav" }), "rec.wav");
@@ -370,7 +386,8 @@ function enqueueTTS(id) {
   state.ttsChain = (state.ttsChain || Promise.resolve()).then(() => playTTSOnce(id)).catch(() => {});
 }
 async function playTTSOnce(id) {
-  if (!state.voiceOn) return;
+  if (!state.voiceOn || state.recording) return; // 녹음 중엔 재생하지 않음
+
   let blob;
   try {
     const r = await fetch(`/api/sessions/${state.sessionId}/tts`, {
@@ -438,10 +455,7 @@ function wireUI() {
   });
   inp.addEventListener("input", () => { inp.style.height = "auto"; inp.style.height = Math.min(120, inp.scrollHeight) + "px"; });
 
-  const mic = $("#btn-mic");
-  mic.addEventListener("pointerdown", (e) => { e.preventDefault(); startRec(); });
-  mic.addEventListener("pointerup", (e) => { e.preventDefault(); stopRec(); });
-  mic.addEventListener("pointerleave", () => { if (state.recording) stopRec(); });
+  $("#btn-mic").addEventListener("click", toggleRec);
 
   $("#btn-attach").addEventListener("click", () => $("#file-input").click());
   $("#file-input").addEventListener("change", (e) => { handleFile(e.target.files[0]); e.target.value = ""; });
