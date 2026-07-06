@@ -24,6 +24,9 @@ def test_ws_welfare_turn_appends_card(rag_client):
         assert card.get("kind") == "card", f"카드 말풍선 없음: {bubbles}"
         assert card["text"].startswith("📌")
         assert "정보 기준일" in card["text"]
+        meta = card.get("card") or {}
+        assert meta.get("title") and meta.get("기준일")  # 구조화 카드(프론트 렌더링용)
+        assert meta.get("source")  # RAG 근거 출처
         card_id = card["id"]
 
     # 카드 TTS는 원문(기호·수치) 대신 짧은 안내문을 합성 — 200 & 오디오 바이트

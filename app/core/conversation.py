@@ -101,7 +101,21 @@ async def _speak(
                 fields, live = await refresh_detail(settings, chunk)
                 card_text, tts = compose_card(chunk, fields, live)
                 cmsg = sess.add_message("assistant", card_text, tts_text=tts)
-                bubbles.append({"id": cmsg.id, "text": card_text, "kind": "card"})
+                bubbles.append({
+                    "id": cmsg.id, "text": card_text, "kind": "card",
+                    "card": {  # 프론트 구조화 렌더링용 (RAG 근거 가시화)
+                        "title": fields.get("서비스명", ""),
+                        "지역": fields.get("지역", ""),
+                        "대상": fields.get("지원대상", ""),
+                        "지원": fields.get("지원내용", ""),
+                        "신청": fields.get("신청방법", ""),
+                        "문의": fields.get("문의처", ""),
+                        "기준일": chunk.collected_at,
+                        "live": live,
+                        "url": chunk.url,
+                        "source": chunk.source,
+                    },
+                })
                 sess.last_rag = {"서비스명": fields.get("서비스명", ""), "serv_id": chunk.serv_id}
                 sess.welfare_cards[chunk.serv_id] = {
                     "id": chunk.serv_id,
@@ -139,17 +153,25 @@ async def _rag_lookup(sess, providers, settings, user_text: str) -> dict | None:
     rt = providers.rag
     if rt is None or not settings.rag_enabled or not user_text.strip():
         return None
+    await sess.send({"type": "rag_status", "status": "searching"})  # 프론트: "복지 자료 찾는 중…"
     try:
         q = augment_query(user_text, (sess.last_rag or {}).get("서비스명"))
         qvec = (await providers.embed.embed([q]))[0]
     except Exception as exc:  # noqa: BLE001 — 임베딩 실패로 턴을 깨지 않는다
         log.warning("rag embed failed (%s) → chit-chat path", exc)
+        await sess.send({"type": "rag_status", "status": "none"})
         return None
     r = hybrid_retrieve(rt, qvec, q, k=settings.rag_top_k, pool=settings.rag_pool)
     ok = passes_gate(r, settings, providers.modes.get("embed", "mock"))
     log.info("rag lookup top=%.3f bm25=%.1f gate=%s q=%s", r.top_score, r.bm25_top, ok, q[:40])
     if not ok:
+        await sess.send({"type": "rag_status", "status": "none"})
         return None
+    await sess.send({
+        "type": "rag_status", "status": "found",
+        "hits": len(r.items), "top_score": round(r.top_score, 3),
+        "sources": [c.source for c, _ in r.items],
+    })
     return {"retrieved": r.items, "block": rag_prompt_block(r.items), "top": r.top_score}
 
 

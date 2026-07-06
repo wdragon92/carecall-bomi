@@ -57,6 +57,9 @@ function handleWS(m) {
     case "ai_turn":
       revealTurn(m.bubbles || []);
       break;
+    case "rag_status":
+      ragStatus(m);
+      break;
     case "findings_update":
       renderFindings(m.findings);
       break;
@@ -114,14 +117,74 @@ function appendSystemNote(text) {
   scrollDown();
   return row;
 }
-function appendAiBubble(text, kind) {
+function appendAiBubble(text, kind, card) {
   const row = rowFor("ai");
   const div = document.createElement("div");
   div.className = "bubble bubble-ai" + (kind === "card" ? " bubble-card" : "");
-  div.textContent = text;
+  if (kind === "card" && card && card.title) {
+    div.appendChild(buildRagCard(card)); // 구조화 카드 (RAG 근거 가시화)
+  } else {
+    div.textContent = text;
+  }
   row.appendChild(div);
   chatLog().appendChild(row);
   scrollDown();
+}
+
+/* RAG 정보 카드 DOM — 전부 textContent 기반 (주입 안전) */
+function buildRagCard(c) {
+  const box = document.createElement("div");
+  const title = document.createElement("div");
+  title.className = "rag-card-title";
+  title.textContent = `📌 ${c.title}`;
+  box.appendChild(title);
+
+  const badge = document.createElement("div");
+  badge.className = "rag-card-badge";
+  badge.textContent = `📚 복지로 공식자료 · ${c["기준일"] || ""} 기준` + (c.live ? " · 방금 확인" : "");
+  box.appendChild(badge);
+
+  for (const key of ["지역", "대상", "지원", "신청", "문의"]) {
+    const v = (c[key] || "").trim();
+    if (!v) continue;
+    const rowEl = document.createElement("div");
+    rowEl.className = "rag-row";
+    const b = document.createElement("b");
+    b.textContent = key;
+    const span = document.createElement("span");
+    span.textContent = v;
+    rowEl.appendChild(b);
+    rowEl.appendChild(span);
+    box.appendChild(rowEl);
+  }
+  if (c.url && /^https:\/\//.test(c.url)) {
+    const a = document.createElement("a");
+    a.className = "rag-link";
+    a.href = c.url;
+    a.target = "_blank";
+    a.rel = "noopener";
+    a.textContent = "복지로에서 자세히 보기 →";
+    box.appendChild(a);
+  }
+  return box;
+}
+
+/* RAG 검색 상태 칩 — "찾는 중" → "N건 찾음" */
+let _chipTimer = null;
+function ragStatus(m) {
+  const wrap = $("#rag-chip-wrap");
+  const chip = $("#rag-chip");
+  clearTimeout(_chipTimer);
+  if (m.status === "searching") {
+    chip.textContent = "📖 복지 자료를 찾아보는 중…";
+    wrap.classList.remove("hidden");
+  } else if (m.status === "found") {
+    chip.textContent = `📚 공식 복지자료 ${m.hits}건에서 근거를 찾았어요`;
+    wrap.classList.remove("hidden");
+    _chipTimer = setTimeout(() => wrap.classList.add("hidden"), 4000);
+  } else {
+    wrap.classList.add("hidden");
+  }
 }
 function showTyping() {
   if (document.getElementById("typing-row")) return;
@@ -138,33 +201,50 @@ function hideTyping() {
 
 /* ================= 특이사항 / 복지 패널 ================= */
 const CAT_ICON = { 건강: "🩺", 정서: "💗", 인지: "🧩", 사기_노출: "⚠️", 복지_니즈: "🤝", 긴급: "🚨" };
+const SEV_RANK = { 높음: 3, 보통: 2, 낮음: 1 };
+/* 특이사항: 항목별 팝업 대신 카테고리로 묶어 전체를 한눈에, 조용히 갱신 */
 function renderFindings(findings) {
   const box = $("#tab-findings");
   box.innerHTML = "";
   if (!findings.length) {
-    box.innerHTML = `<p class="text-gray-400 text-center mt-8 text-sm">대화가 진행되면<br>특이사항이 여기에 정리됩니다.</p>`;
+    box.innerHTML = `<p class="text-gray-400 text-center my-6 text-sm">대화가 진행되면<br>특이사항이 여기에 정리됩니다.</p>`;
     return;
   }
-  let hasNew = false;
+  let newUrgent = false;
+  const groups = new Map();
   for (const f of findings) {
-    const isNew = !state.seenFindings.has(f.id);
-    if (isNew) {
+    if (!state.seenFindings.has(f.id)) {
       state.seenFindings.add(f.id);
-      hasNew = true;
+      if (f.severity === "높음" || f.category === "긴급") newUrgent = true;
     }
+    if (!groups.has(f.category)) groups.set(f.category, []);
+    groups.get(f.category).push(f);
+  }
+  const ordered = [...groups.entries()].sort((a, b) => {
+    const w = (items) => Math.max(...items.map((f) => SEV_RANK[f.severity] || 0));
+    return w(b[1]) - w(a[1]);
+  });
+  for (const [cat, items] of ordered) {
+    const worst = items.reduce((a, b) => (SEV_RANK[b.severity] > SEV_RANK[a.severity] ? b : a));
+    const anyHuman = items.some((f) => f.needs_human);
     const el = document.createElement("div");
-    el.className = `card sev-${f.severity} ${isNew ? "newcard" : ""}`;
+    el.className = `card sev-${worst.severity}`;
     el.innerHTML = `
       <div class="flex items-center justify-between">
-        <span class="font-semibold">${CAT_ICON[f.category] || "•"} ${f.category.replace("_", " ")}</span>
-        <span class="text-xs px-2 py-0.5 rounded-full ${sevChip(f.severity)}">${f.severity}</span>
+        <span class="font-semibold">${CAT_ICON[cat] || "•"} ${cat.replace("_", " ")} <span class="text-xs text-gray-400">${items.length}건</span></span>
+        <span class="text-xs px-2 py-0.5 rounded-full ${sevChip(worst.severity)}">${worst.severity}</span>
       </div>
-      <div class="mt-1 text-sm text-gray-700"></div>
-      ${f.needs_human ? '<div class="mt-1 text-xs font-semibold text-red-600">👤 보호자·담당자 연결 권고</div>' : ""}`;
-    el.querySelector(".text-gray-700").textContent = f.content;
+      <ul class="fcat-items"></ul>
+      ${anyHuman ? '<div class="mt-1 text-xs font-semibold text-red-600">👤 보호자·담당자 연결 권고</div>' : ""}`;
+    const ul = el.querySelector(".fcat-items");
+    for (const f of items) {
+      const li = document.createElement("li");
+      li.textContent = f.content;
+      ul.appendChild(li);
+    }
     box.appendChild(el);
   }
-  if (hasNew) flashMobileBadge();
+  if (newUrgent) flashMobileBadge(); // 높음/긴급일 때만 알림 (조용한 갱신)
 }
 function sevChip(s) {
   return s === "높음" ? "bg-red-100 text-red-700" : s === "보통" ? "bg-amber-100 text-amber-700" : "bg-green-100 text-green-700";
@@ -217,7 +297,39 @@ function sendFromInput() {
 }
 
 /* ================= 입력: 마이크 (클릭 토글 — 눌러 시작, 다시 눌러 전송) ================= */
-let _stream, _ctx, _proc, _src, _chunks, _recTimer;
+let _stream, _ctx, _proc, _src, _chunks, _recTimer, _recog, _liveRow;
+
+/* 실시간 인식 미리보기 (브라우저 Web Speech) — 표시용일 뿐, 최종 확정은 CLOVA CSR.
+   미지원 브라우저(사파리 일부/파이어폭스)는 조용히 기존 방식으로 동작. */
+function startLivePreview() {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) return;
+  try {
+    _recog = new SR();
+    _recog.lang = "ko-KR";
+    _recog.interimResults = true;
+    _recog.continuous = true;
+    _liveRow = appendUserBubble("🎤 듣고 있어요…");
+    _liveRow.querySelector(".bubble").classList.add("bubble-live");
+    _recog.onresult = (e) => {
+      let txt = "";
+      for (const res of e.results) txt += res[0].transcript;
+      txt = txt.trim();
+      if (txt && _liveRow) {
+        _liveRow.querySelector(".bubble").textContent = "🎤 " + txt;
+        scrollDown();
+      }
+    };
+    _recog.onerror = () => {};
+    _recog.start();
+  } catch (e) {
+    _recog = null;
+  }
+}
+function stopLivePreview() {
+  try { _recog && _recog.stop(); } catch (e) {}
+  _recog = null;
+}
 async function toggleRec() {
   if (state.recPending) return; // 권한 프롬프트 대기 중 중복 클릭 무시
   if (state.recording) await stopRec();
@@ -248,6 +360,7 @@ async function startRec() {
   _proc.onaudioprocess = (e) => _chunks.push(new Float32Array(e.inputBuffer.getChannelData(0)));
   _src.connect(_proc);
   _proc.connect(_ctx.destination);
+  startLivePreview(); // 말하는 동안 실시간 자막 (지원 브라우저만)
   _recTimer = setTimeout(() => { if (state.recording) stopRec(); }, 30000); // 최대 30초(CSR 60초 제한 대비)
 }
 async function stopRec() {
@@ -263,26 +376,39 @@ async function stopRec() {
     _src.disconnect();
     _stream.getTracks().forEach((t) => t.stop());
   } catch (e) {}
+  stopLivePreview();
   const sr = _ctx.sampleRate;
   const flat = flatten(_chunks);
   try { await _ctx.close(); } catch (e) {}
-  if (flat.length < sr * 0.3) { toast("말씀이 너무 짧았어요. 🎤을 누르고 말씀하신 뒤 다시 눌러 주세요."); return; }
+  // 실시간 미리보기 말풍선이 있으면 그대로 이어받아 확정 단계 표시
+  const note = _liveRow || appendUserBubble("🎤 음성 인식 중…");
+  _liveRow = null;
+  const noteBubble = note.querySelector(".bubble");
+  if (flat.length < sr * 0.3) {
+    note.remove();
+    toast("말씀이 너무 짧았어요. 🎤을 누르고 말씀하신 뒤 다시 눌러 주세요.");
+    return;
+  }
+  if (noteBubble.classList.contains("bubble-live") && noteBubble.textContent === "🎤 듣고 있어요…") {
+    noteBubble.textContent = "🎤 음성 인식 중…";
+  }
   const wav = encodeWAV(downsample(flat, sr, 16000), 16000);
   const fd = new FormData();
   fd.append("file", new Blob([wav], { type: "audio/wav" }), "rec.wav");
-  const note = appendUserBubble("🎤 음성 인식 중…");
   try {
     const r = await fetch(`/api/sessions/${state.sessionId}/audio`, { method: "POST", body: fd });
     const d = await r.json();
     const text = (d.text || "").trim();
+    noteBubble.classList.remove("bubble-live");
     if (text) {
-      note.querySelector(".bubble").textContent = text;
+      noteBubble.textContent = text; // 최종 확정 = CLOVA CSR 결과
       sendUserMessage(text, "voice", { noBubble: true });
     } else {
-      note.querySelector(".bubble").textContent = "(음성을 알아듣지 못했어요)";
+      noteBubble.textContent = "(음성을 알아듣지 못했어요)";
     }
   } catch (e) {
-    note.querySelector(".bubble").textContent = "(음성 전송에 실패했어요)";
+    noteBubble.classList.remove("bubble-live");
+    noteBubble.textContent = "(음성 전송에 실패했어요)";
   }
 }
 function flatten(chunks) {
@@ -415,7 +541,7 @@ async function revealTurn(bubbles) {
     await _sleep(Math.min(900, 280 + bubbles[i].text.length * 11)); // '입력 중' 짧은 뜸
     if (myTurn !== _turn) { hideTyping(); return; }
     hideTyping();
-    appendAiBubble(bubbles[i].text, bubbles[i].kind);
+    appendAiBubble(bubbles[i].text, bubbles[i].kind, bubbles[i].card);
     if (useVoice && state.voiceOn && !state.recording) {
       const blob = await blobs[i];
       if (myTurn !== _turn) return;
@@ -439,7 +565,7 @@ async function endSession() {
     toast("리포트를 만들지 못했어요.");
   } finally {
     $("#btn-end").disabled = false;
-    setBadge("봄이가 곁에 있어요");
+    setBadge("보미가 곁에 있어요");
   }
 }
 function renderReport(rep) {
@@ -478,7 +604,6 @@ function wireUI() {
   $("#btn-end").addEventListener("click", endSession);
   $("#btn-close-report").addEventListener("click", () => $("#report-modal").classList.add("hidden"));
 
-  $$(".tab-btn").forEach((btn) => btn.addEventListener("click", () => switchTab(btn.dataset.tab)));
   $$(".mview-btn").forEach((btn) => btn.addEventListener("click", () => switchMobile(btn.dataset.mview)));
 }
 function toggleVoice() {
@@ -489,17 +614,6 @@ function toggleVoice() {
   btn.classList.toggle("bg-blue-100", state.voiceOn);
   if (!state.voiceOn) stopAudio();
   state.ws?.send(JSON.stringify({ type: "set_voice", on: state.voiceOn }));
-}
-function switchTab(tab) {
-  $$(".tab-btn").forEach((b) => {
-    const on = b.dataset.tab === tab;
-    b.classList.toggle("border-blue-600", on);
-    b.classList.toggle("text-blue-600", on);
-    b.classList.toggle("border-transparent", !on);
-    b.classList.toggle("text-gray-500", !on);
-  });
-  $("#tab-findings").classList.toggle("hidden", tab !== "findings");
-  $("#tab-welfare").classList.toggle("hidden", tab !== "welfare");
 }
 function switchMobile(view) {
   $("#chat-pane").classList.toggle("hidden", view !== "chat");
@@ -519,9 +633,9 @@ function flashMobileBadge() {
 /* ================= 유틸 ================= */
 function setBadge(t) { $("#mode-badge").textContent = t; }
 function showModes(p) {
-  if (!p) return setBadge("봄이가 곁에 있어요");
+  if (!p) return setBadge("보미가 곁에 있어요");
   const allReal = Object.values(p).every((v) => v === "real");
-  setBadge(allReal ? "봄이가 듣고 있어요 (실시간 연동)" : "봄이가 듣고 있어요 (일부 데모)");
+  setBadge(allReal ? "보미가 듣고 있어요 (실시간 연동)" : "보미가 듣고 있어요 (일부 데모)");
   $("#mode-badge").title = `LLM:${p.llm} STT:${p.stt} TTS:${p.tts} OCR:${p.ocr} EMB:${p.embed || "-"}`;
 }
 function escapeHtml(s) {
