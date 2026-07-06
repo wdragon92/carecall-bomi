@@ -71,3 +71,13 @@ def test_idiom_not_suicide_false_positive():
     for utter in ["아이고 무릎 아파 죽겠네", "더워 죽겠어", "우스워 죽겠네"]:
         kinds = {d["_kind"] for d in safety.scan(utter)}
         assert "suicide_acute" not in kinds and "suicide_warning" not in kinds, utter
+
+
+def test_phrase_variants_from_matrix_audit():
+    """테스트 카탈로그 감사에서 발견된 어순·활용 변형 공백 보강."""
+    kinds = {d["_kind"] for d in safety.scan("변이 새까만 게 짜장 같아")}
+    assert "medical_emergency" in kinds  # 위장관 출혈 신호 (어순 변형)
+    kinds = {d["_kind"] for d in safety.scan("먼저 간 양반이 부럽네")}
+    assert "suicide_warning" in kinds  # 완곡 자살 신호 ('양반' 변형)
+    kinds = {d["_kind"] for d in safety.scan("요즘 자꾸 어지럽네")}
+    assert "medical_soon" in kinds  # 'ㅂ' 활용형

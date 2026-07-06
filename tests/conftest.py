@@ -32,6 +32,22 @@ def client(app):
 
 
 @pytest.fixture
+def norag_client(tmp_path, monkeypatch):
+    """RAG 인덱스가 확실히 '없는' 앱 클라이언트 (RAG off 경로 검증용).
+    기본 client는 리포의 data/ 인덱스 유무에 따라 RAG 상태가 달라질 수 있어,
+    빈 디렉토리를 강제해 결정성을 확보한다."""
+    monkeypatch.setenv("RAG_DATA_DIR", str(tmp_path / "empty"))
+    get_settings.cache_clear()
+    try:
+        from starlette.testclient import TestClient
+
+        with TestClient(create_app()) as c:
+            yield c
+    finally:
+        get_settings.cache_clear()
+
+
+@pytest.fixture
 def rag_client(tmp_path, monkeypatch):
     """목 임베딩으로 빌드한 인덱스를 쓰는 앱 클라이언트 (RAG on)."""
     import asyncio
