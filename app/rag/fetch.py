@@ -77,10 +77,23 @@ def _parse_detail(xml_text: str) -> dict:
     return out
 
 
-async def _get_xml(client: httpx.AsyncClient, url: str, key: str, params: dict, timeout: float = 20.0) -> str:
-    r = await client.get(url, params={"serviceKey": key, **params}, timeout=timeout)
-    r.raise_for_status()
-    return r.text
+async def _get_xml(client: httpx.AsyncClient, url: str, key: str, params: dict,
+                   timeout: float = 20.0, tries: int = 4) -> str:
+    """GET + 429 지수 백오프. 예외 메시지에 URL(=serviceKey)을 절대 담지 않는다(로그 유출 방지)."""
+    delay = 2.0
+    for _ in range(tries):
+        try:
+            r = await client.get(url, params={"serviceKey": key, **params}, timeout=timeout)
+        except httpx.HTTPError as exc:
+            raise RuntimeError(f"net:{type(exc).__name__}") from None
+        if r.status_code == 429:  # 데이터포털 과속 제한 — 기다렸다 재시도
+            await asyncio.sleep(delay)
+            delay *= 2
+            continue
+        if r.status_code != 200:
+            raise RuntimeError(f"HTTP {r.status_code}") from None
+        return r.text
+    raise RuntimeError("HTTP 429 (retries exhausted)")
 
 
 async def fetch_all(client: httpx.AsyncClient, list_url: str, key: str,
@@ -141,7 +154,7 @@ async def api_cards(settings, age_filter: bool = True, progress=None) -> list[Do
                 cards.append(service_to_card({**row, **detail}, "central", today))
                 if progress and (i + 1) % 50 == 0:
                     progress(f"central detail: {i + 1}/{len(keep)}")
-                await asyncio.sleep(0.1)
+                await asyncio.sleep(0.25)  # 포털 과속(429) 예방
 
         if lk:
             rows = await fetch_all(client, settings.welfare_local_list_url, lk, parse_items_local)
@@ -163,7 +176,7 @@ async def api_cards(settings, age_filter: bool = True, progress=None) -> list[Do
                 cards.append(service_to_card(merged, "local", today))
                 if progress and (i + 1) % 50 == 0:
                     progress(f"local detail: {i + 1}/{len(keep)}")
-                await asyncio.sleep(0.1)
+                await asyncio.sleep(0.25)  # 포털 과속(429) 예방
 
     if progress:
         progress(f"api cards total: {len(cards)}")
