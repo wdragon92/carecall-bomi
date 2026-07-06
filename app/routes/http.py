@@ -36,6 +36,8 @@ def _clean_for_tts(text: str) -> str:
     t = _EMOJI.sub("", text)
     t = re.sub(r"[*_`#>~\[\]()]", " ", t)
     t = re.sub(r"\s+", " ", t).strip()
+    # 낭독 페이싱: "잘 안 ~"를 붙여 읽어 어색 → 쉼표로 ~0.2초 숨 (화면 표시는 원문 그대로)
+    t = t.replace("잘 안 ", "잘, 안 ")
     return t[:1900]
 
 
