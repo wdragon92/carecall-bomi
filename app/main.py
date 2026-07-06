@@ -43,6 +43,13 @@ async def lifespan(app: FastAPI):
     app.state.settings = s
     app.state.store = SessionStore(ttl_min=s.session_ttl_min)
     app.state.providers = build_providers(s)
+    if s.rag_enabled:
+        try:  # 인덱스가 없거나 손상돼도 앱은 뜬다 (RAG만 off)
+            from app.rag.search import load_runtime
+
+            app.state.providers.rag = load_runtime(s, app.state.providers.modes.get("embed", "mock"))
+        except Exception as exc:  # noqa: BLE001
+            log.warning("RAG init failed (%s) — RAG off", exc)
     sweeper = asyncio.create_task(_sweep_loop(app))
     log.info("돌봄콜 AI 시작 — http://%s:%s", s.app_host, s.app_port)
     try:

@@ -42,12 +42,34 @@ def _clean_for_tts(text: str) -> str:
 @router.get("/health")
 async def health(request: Request) -> dict:
     app = request.app
+    rag = getattr(app.state.providers, "rag", None)
     return {
         "status": "ok",
         "mock_mode": app.state.settings.mock_mode,
         "providers": app.state.providers.modes,
         "sessions": app.state.store.count(),
+        "rag": (
+            {
+                "loaded": True,
+                "chunks": len(rag.chunks),
+                "embed_mode": rag.meta.get("embed_mode", ""),
+                "built_at": rag.meta.get("built_at", ""),
+            }
+            if rag
+            else {"loaded": False}
+        ),
     }
+
+
+@router.post("/api/rag/reload")
+async def rag_reload(request: Request) -> dict:
+    """재빌드(build_index.py) 후 무중단 인덱스 교체 — 발표 당일 갱신용."""
+    from app.rag.search import load_runtime
+
+    providers = request.app.state.providers
+    rt = load_runtime(request.app.state.settings, providers.modes.get("embed", "mock"))
+    providers.rag = rt
+    return {"loaded": rt is not None, "chunks": len(rt.chunks) if rt else 0}
 
 
 @router.post("/api/sessions")

@@ -10,4 +10,4 @@ def test_ws_session_ready(client):
         msg = ws.receive_json()
         assert msg["type"] == "session_ready"
         assert msg["session_id"] == sid
-        assert set(msg["providers"]) == {"llm", "stt", "tts", "ocr"}
+        assert set(msg["providers"]) == {"llm", "stt", "tts", "ocr", "embed"}

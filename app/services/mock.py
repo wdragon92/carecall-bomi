@@ -1,12 +1,14 @@
-"""키 없이도 데모가 '살아있게' 하는 mock provider 4종 (services §7.3).
+"""키 없이도 데모가 '살아있게' 하는 mock provider 5종 (services §7.3).
 결정적(deterministic) 규칙 기반이라 시나리오 데모/테스트에 사용."""
 from __future__ import annotations
 
 import asyncio
 import io
 import math
+import re
 import struct
 import wave
+import zlib
 from typing import AsyncIterator
 
 
@@ -169,3 +171,27 @@ class MockOCR:
         if any(k in low for k in ("문자", "sms", "smish", "link", "택배")):
             return _OCR_SMS
         return _OCR_BILL
+
+
+class MockEmbed:
+    """결정적 문자 n-gram 해시 임베딩(1024차원, L2 정규화).
+    의미 벡터는 아니지만 어휘가 겹치면 코사인이 높아져, 키 없이도 RAG 검색이
+    시나리오 데모에서 의미 있게 동작한다. crc32라 프로세스 간에도 재현 가능."""
+
+    DIM = 1024
+
+    def __init__(self, settings=None) -> None:
+        pass
+
+    def _vec(self, text: str) -> list[float]:
+        v = [0.0] * self.DIM
+        t = re.sub(r"\s+", " ", (text or "")).strip()
+        for n in (2, 3):
+            for i in range(max(0, len(t) - n + 1)):
+                h = zlib.crc32(t[i : i + n].encode("utf-8"))
+                v[h % self.DIM] += 1.0 if (h >> 16) & 1 else -1.0
+        norm = math.sqrt(sum(x * x for x in v)) or 1.0
+        return [x / norm for x in v]
+
+    async def embed(self, texts: list[str]) -> list[list[float]]:
+        return [self._vec(t) for t in texts]

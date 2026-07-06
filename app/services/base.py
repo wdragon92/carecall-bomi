@@ -1,4 +1,4 @@
-"""Provider 추상 인터페이스 4종 (services §7.1)."""
+"""Provider 추상 인터페이스 5종 (services §7.1)."""
 from __future__ import annotations
 
 from typing import AsyncIterator, Protocol, runtime_checkable
@@ -28,3 +28,8 @@ class TTSProvider(Protocol):
 @runtime_checkable
 class OCRProvider(Protocol):
     async def extract_text(self, image_bytes: bytes, fmt: str, name: str = "") -> str: ...
+
+
+@runtime_checkable
+class EmbedProvider(Protocol):
+    async def embed(self, texts: list[str]) -> list[list[float]]: ...

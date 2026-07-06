@@ -30,6 +30,21 @@ class Settings(BaseSettings):
     ncp_secret_key: str = ""
     ncp_region: str = "KR"
 
+    # RAG — 복지 검색 (docs/돌봄콜_RAG_파이프라인_계획_v2.md)
+    rag_enabled: bool = True
+    rag_data_dir: str = "data"
+    rag_top_k: int = 4
+    rag_pool: int = 20
+    rag_score_threshold: float = 0.41       # 실 임베딩(bge-m3 코사인) 거부 임계값 — 실측 in 0.42~/out ~0.40, P4에서 재튜닝
+    rag_score_threshold_mock: float = 0.15  # 목 n-gram 벡터는 분포가 달라 별도 임계값
+    rag_rewrite: bool = False               # LLM 질문 재작성(실모드 전용, 기본 off — 지연 1콜 추가)
+
+    # 공공데이터포털 (P0 후 채움 — 발급은 사용자, Decoding 키만)
+    welfare_api_key: str = ""
+    welfare_central_list_url: str = ""
+    welfare_central_detail_url: str = ""
+    welfare_local_list_url: str = ""
+
     # 앱 파라미터
     app_host: str = "127.0.0.1"
     app_port: int = 8080  # 8000은 Windows 예약대역(7902-8001)에 걸려 바인딩 실패할 수 있음
@@ -53,6 +68,10 @@ class Settings(BaseSettings):
 
     def ocr_available(self) -> bool:
         return bool(self.clova_ocr_invoke_url.strip() and self.clova_ocr_secret.strip())
+
+    def rag_threshold(self, embed_mode: str) -> float:
+        """거부 판정 임계값 — 임베딩 종류(real/mock)에 따라 분포가 달라 분리."""
+        return self.rag_score_threshold if embed_mode == "real" else self.rag_score_threshold_mock
 
 
 @lru_cache

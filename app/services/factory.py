@@ -7,20 +7,22 @@ import importlib
 import logging
 
 from app.config import Settings
-from app.services.mock import MockLLM, MockOCR, MockSTT, MockTTS
+from app.services.mock import MockEmbed, MockLLM, MockOCR, MockSTT, MockTTS
 
 log = logging.getLogger("providers")
 
 
 class Providers:
-    def __init__(self, llm, stt, tts, ocr, modes: dict[str, str], mocks) -> None:
+    def __init__(self, llm, stt, tts, ocr, embed, modes: dict[str, str], mocks) -> None:
         self.llm = llm
         self.stt = stt
         self.tts = tts
         self.ocr = ocr
+        self.embed = embed
         self.modes = modes  # {"llm": "real|mock", ...}
         # 런타임 폴백용 mock (real 호출 실패 시 호출부에서 사용)
-        self.mllm, self.mstt, self.mtts, self.mocr = mocks
+        self.mllm, self.mstt, self.mtts, self.mocr, self.membed = mocks
+        self.rag = None  # RagRuntime — lifespan에서 인덱스 로드 후 부착 (없으면 RAG off)
 
 
 def _build_one(kind, use_real, real_ref, mock_inst, settings):
@@ -37,7 +39,7 @@ def _build_one(kind, use_real, real_ref, mock_inst, settings):
 
 def build_providers(s: Settings) -> Providers:
     m = s.mock_mode
-    mllm, mstt, mtts, mocr = MockLLM(s), MockSTT(s), MockTTS(s), MockOCR(s)
+    mllm, mstt, mtts, mocr, membed = MockLLM(s), MockSTT(s), MockTTS(s), MockOCR(s), MockEmbed(s)
     llm, m_llm = _build_one("llm", not m and s.llm_available(),
                             ("app.services.clova_llm", "ClovaLLM"), mllm, s)
     stt, m_stt = _build_one("stt", not m and s.stt_available(),
@@ -46,6 +48,9 @@ def build_providers(s: Settings) -> Providers:
                             ("app.services.clova_tts", "ClovaTTS"), mtts, s)
     ocr, m_ocr = _build_one("ocr", not m and s.ocr_available(),
                             ("app.services.clova_ocr", "ClovaOCR"), mocr, s)
-    modes = {"llm": m_llm, "stt": m_stt, "tts": m_tts, "ocr": m_ocr}
+    # 임베딩은 CLOVA Studio 키 공유 (v2 §5)
+    embed, m_embed = _build_one("embed", not m and s.llm_available(),
+                                ("app.services.clova_embed", "ClovaEmbed"), membed, s)
+    modes = {"llm": m_llm, "stt": m_stt, "tts": m_tts, "ocr": m_ocr, "embed": m_embed}
     log.info("MOCK_MODE=%s | provider modes: %s", s.mock_mode, modes)
-    return Providers(llm, stt, tts, ocr, modes, (mllm, mstt, mtts, mocr))
+    return Providers(llm, stt, tts, ocr, embed, modes, (mllm, mstt, mtts, mocr, membed))
