@@ -43,6 +43,9 @@ def _is_backchannel(text: str) -> bool:
 _DECLINE = re.compile(r"아니|괜찮|됐어|나중|말고|싫")
 _INFO_REQ = re.compile(r"알려|궁금|자세히|말해|들어보")
 _ANAPHORA = re.compile(r"그거|그건|그게|아까|저거")  # 앞선 제안·안내를 가리키는 대용어
+# 세션 밖 과거 참조("저번에 니가 알려준다던…") — 안내 이력이 없으면 접지를 태우지 않는다
+# (자료가 실리면 모델이 '말씀드렸던…확인해보니…' 가짜 연속성으로 안내 모드에 빠지는 실측)
+_PAST_REF = re.compile(r"저번에|지난번|접때|요전에")
 # 이미 송금·이체가 일어난 정황(과거형) — 결정적 행동 카드 트리거
 _FRAUD_SENT = re.compile(r"보냈|보내 ?버렸|송금했|송금해 ?버렸|이체했|입금했|부쳤")
 
@@ -252,6 +255,10 @@ def _situation_memo(sess, offer_hint: bool = True) -> str:
     guided = [c.get("이름", "") for c in sess.welfare_cards.values() if c.get("이름")]
     if guided:
         parts.append("- 이미 안내한 복지: " + ", ".join(guided))
+    else:
+        # 결정적 앵커 — "저번에 알려준다던 그거"에 가짜 연속성("말씀드렸던…확인해보니…")으로
+        # 응하는 날조 실측 대응. 안내 이력이 없음을 명시해 정직한 확인 질문을 강제한다.
+        parts.append("- 이 대화에서 지금까지 안내해 드린 복지: 없음 — 과거에 알려드린 것처럼 말하지 말 것")
     offer = _offer_candidate(sess) if offer_hint else None
     if offer:
         parts.append(
@@ -526,7 +533,12 @@ async def handle_turn(sess, providers, settings) -> None:
                 break
     # 수락형 발화("응 자세히 알려줘")는 일반 검색으로 흘리지 않는다 — 기능어 위주라
     # 어휘 우연으로 게이트를 뚫고 무관 자료가 접지되는 사고 실측(응급안전안심 등).
-    if card_ctx is None and not bc and not accepted:
+    # 과거 참조("저번에 알려준다던 그거")인데 이 대화에 안내 이력이 없으면 역시 접지 금지
+    # — 자료가 실리면 가짜 연속성 날조의 연료가 된다. 정직한 확인 질문 경로로.
+    past_ref_no_history = (
+        _PAST_REF.search(user_text) and not sess.welfare_cards and sess.last_rag is None
+    )
+    if card_ctx is None and not bc and not accepted and not past_ref_no_history:
         card_ctx = await _rag_lookup(sess, providers, settings, user_text)
 
     # 동일 턴 위험신호 주입 — 결정적 안전망(scan)은 즉시 계산되므로, 배너(비동기 추출)와

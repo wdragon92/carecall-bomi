@@ -50,8 +50,9 @@ def test_alert_levels():
     assert safety.alert({"medical_emergency"})[0] == "emergency"
     assert safety.alert({"suicide_warning"})[0] == "warning"
     assert safety.alert({"medical_soon"})[0] == "warning"
-    # LLM 심각신호는 건강/심리로 분리 (109는 심리 전용)
-    assert safety.alert(set(), {"psych"})[0] == "emergency"
+    # LLM 심각신호는 건강/심리로 분리 (109는 심리 전용).
+    # LLM 단독 심리 플래그는 warning — 급성은 결정망 전담, 환각 오경보 방지(실측)
+    assert safety.alert(set(), {"psych"})[0] == "warning"
     assert safety.alert(set(), {"medical"})[0] == "emergency"
     assert safety.alert(set())[0] is None
 

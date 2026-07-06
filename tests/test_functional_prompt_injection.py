@@ -25,17 +25,19 @@ from test_functional_helpers import (
 from app.core import prompts
 
 
-# ---- 계약 4: [어르신 상황 메모]는 추출 '이후 턴'부터 ----
+# ---- 계약 4(개정): 메모 블록은 항상 존재하되(안내 이력 '없음' 앵커 — 과거 날조 방지),
+# 추출 산출(관찰 내용)은 '이후 턴'부터 실린다 ----
 def test_memo_block_appears_only_after_extraction(rag_client):
     spy = install_llm_spy(rag_client)
     sid = rag_client.post("/api/sessions").json()["session_id"]
     with rag_client.websocket_connect(f"/ws/{sid}") as ws:
         handshake(ws)
 
-        # 첫 턴 — 추출 전이므로 메모 블록 없음 (복지 키워드도 없는 발화로 폴백 힌트 배제)
+        # 첫 턴 — 추출 전: 관찰 내용은 없고 '안내한 복지 없음' 앵커만 실린다
         user_turn(ws, "요즘 잠을 통 못 자요")
         sys1 = spy.chat_system()
-        assert "[어르신 상황 메모" not in sys1
+        assert "안내해 드린 복지: 없음" in sys1
+        assert "관찰됨(" not in sys1
 
         # 턴 끝 추출이 findings를 만들 때까지 대기 (수면 관찰이 세션에 적재됨)
         drain_until(

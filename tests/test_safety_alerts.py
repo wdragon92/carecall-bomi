@@ -22,12 +22,12 @@ def test_alert_split_by_llm_flags():
     # LLM이 건강 위급만 잡음 → 119 전용 문구
     level, msg = safety.alert(set(), {"medical"})
     assert level == "emergency" and "119" in msg and "109" not in msg
-    # LLM이 심리 위급 → 109 포함 문구
+    # LLM 단독 심리 위급 → warning + 109 (환각 오경보가 emergency 신뢰를 깎는 실측 대응)
     level, msg = safety.alert(set(), {"psych"})
-    assert level == "emergency" and "109" in msg
-    # 둘 다면 심리(109 포함) 우선 — 사람 연결이 가장 급한 케이스
+    assert level == "warning" and "109" in msg
+    # 의료+심리 동시(LLM)면 의료 emergency(119)가 우선 — 결정 우선순위
     level, msg = safety.alert(set(), {"medical", "psych"})
-    assert "109" in msg
+    assert level == "emergency" and "119" in msg
 
 
 def test_suicide_rules_keep_109():
@@ -47,9 +47,9 @@ def test_fraud_flag_routes_to_112_not_109():
     level, msg = safety.alert(set(), {"fraud"})
     assert level == "warning"
     assert "112" in msg and "1332" in msg and "109" not in msg
-    # 심리 위급이 동시면 심리(emergency)가 우선
+    # 심리 플래그 동시면 심리 warning(109)이 사기 문구보다 우선
     level, msg = safety.alert(set(), {"fraud", "psych"})
-    assert level == "emergency" and "109" in msg
+    assert level == "warning" and "109" in msg
 
 
 def test_code_medical_emergency_beats_llm_psych_flag():

@@ -135,12 +135,15 @@ def alert(kinds: set[str], llm_flags: set[str] | frozenset[str] = frozenset()) -
         return "emergency", "위급한 신호가 감지됐어요. 지금 자살예방상담 109 또는 119, 곁의 보호자·담당자에게 바로 연결하시길 권해요."
     if "medical_emergency" in kinds:
         return "emergency", "응급이 의심되는 몸 신호가 있어요. 지금 바로 119에 연락하시고, 보호자께도 알려주세요."
-    if "psych" in llm_flags:
-        return "emergency", "위급한 신호가 감지됐어요. 지금 자살예방상담 109 또는 119, 곁의 보호자·담당자에게 바로 연결하시길 권해요."
     if "medical" in llm_flags:
         return "emergency", "응급이 의심되는 몸 신호가 있어요. 지금 바로 119에 연락하시고, 보호자께도 알려주세요."
     if "suicide_warning" in kinds:
         return "warning", "마음이 많이 지치신 것 같아 걱정돼요. 혼자 힘들어하지 마시고, 24시간 자살예방상담 109나 가까운 분과 이야기 나눠보시길 권해요."
+    if "psych" in llm_flags:
+        # LLM 단독 심리 플래그는 warning — 급성 신호(죽고 싶다 등 직접 표현)는 결정망이
+        # 전담하고, LLM 환각(무해한 거절을 '긴급'으로)이 자살 배너를 오발하면
+        # 진짜 경보의 신뢰가 깎이는 실측 대응(오경보 피로)
+        return "warning", "마음이 많이 힘드신 것 같아 걱정돼요. 혼자 견디지 마시고, 24시간 자살예방상담 109나 가까운 분과 이야기 나눠보시길 권해요."
     if "fraud_exposure" in kinds or "fraud" in llm_flags:
         return "warning", "사기가 의심되는 정황이 있어요. 돈·개인정보는 절대 보내지 마시고, 이미 보내셨다면 지금 바로 경찰 112와 은행 지급정지, 금융감독원 1332에 연락하세요."
     if "medical_soon" in kinds:
