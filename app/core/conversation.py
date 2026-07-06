@@ -1,5 +1,5 @@
 """채팅/OCR 오케스트레이션 (conversation §8).
-전화 통화하듯 '문장 단위 말풍선 여러 개'로 나눠 보내고, 짧은 호응은 자연스럽게 이어간다.
+전화 통화하듯 짧은 말풍선 여러 개(단락 단위)로 나눠 보내고, 짧은 호응은 자연스럽게 이어간다.
 real 실패 시 mock 폴백. 모든 WS 전송은 sess.send()로 직렬화된다."""
 from __future__ import annotations
 
@@ -29,33 +29,29 @@ def _is_backchannel(text: str) -> bool:
     return bool(t) and len(t) <= 5 and t in BACKCHANNELS
 
 
-def _sentences(t: str) -> list[str]:
-    parts = re.split(r"(?<=[.?!。])\s+", t.strip())
-    return [p.strip() for p in parts if p.strip()]
+# 목록 항목(번호/글머리/굵은 용어+콜론)으로 시작하는 단락 — 앞 말풍선에 이어 붙일 대상
+_LIST_ITEM = re.compile(r"^\s*(?:[-•*]\s|\d{1,2}[.)]\s|\*\*[^*\n]{1,30}\*\*\s*:)")
 
 
 def _segments(text: str) -> list[str]:
-    """LLM 응답을 말풍선 단위로 분리. 각 블록을 문장 단위로 쪼개되,
-    긴 정보성 답(복지 안내 등, 220자 초과)은 한 말풍선으로 유지한다."""
+    """LLM 응답을 말풍선 단위로 분리 — 문장이 아니라 단락(빈 줄) 기준.
+    목록 항목·콜론으로 이어지는 단락·짧은 조각은 앞 말풍선에 붙여,
+    복지 안내 같은 정보성 답변이 쪼개지지 않고 통으로 전달되게 한다."""
     text = (text or "").strip()
     if not text:
         return []
     out: list[str] = []
-    for block in re.split(r"\n\s*\n|\n", text):
+    for block in re.split(r"\n\s*\n", text):
         block = block.strip()
         if not block:
             continue
-        if len(block) > 220:  # 긴 정보성(복지 등)은 통째로 한 말풍선
+        if out and (_LIST_ITEM.match(block) or out[-1].rstrip().endswith(":") or len(block) < 6):
+            out[-1] += "\n" + block
+        else:
             out.append(block)
-        else:
-            out.extend(_sentences(block) or [block])
-    merged: list[str] = []
-    for s in out:
-        if merged and len(s) < 6:
-            merged[-1] += " " + s
-        else:
-            merged.append(s)
-    return merged[:6]
+    if len(out) > 4:  # 말풍선 최대 4개 — 넘치면 버리지 않고 마지막에 합침
+        out[3:] = ["\n\n".join(out[3:])]
+    return out
 
 
 async def _typing(sess, on: bool) -> None:
@@ -111,7 +107,8 @@ async def handle_turn(sess, providers, settings) -> None:
     bc = bool(last and last.role == "user" and _is_backchannel(last.text))
     system = prompts.chat_system(welfare.get_digest(), backchannel=bc)
     messages = [{"role": "system", "content": system}] + sess.history_for_llm()
-    await _speak(sess, providers, messages, max_tokens=240)
+    # 복지 안내처럼 긴 정보가 목록 중간에 잘리지 않도록 여유 있게. 평소 답의 길이는 프롬프트가 통제.
+    await _speak(sess, providers, messages, max_tokens=600)
     _spawn_extract(sess, providers)  # 비동기 추출
 
 
