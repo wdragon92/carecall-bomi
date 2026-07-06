@@ -164,6 +164,32 @@ def test_fraud_sent_action_card_via_ws(rag_client):
         assert "112" in joined and "지급정지" in joined and "1332" in joined
 
 
+def test_offer_window_survives_decline_turn():
+    """"아니 됐어" 거절 후 "아까 그거 알려줘" — 제안 참조가 사용자 2턴까지 유효 (D5 실측)."""
+    from app.core.conversation import _last_offer_text, _normalize_utterance
+
+    sess = SimpleNamespace(messages=[
+        SimpleNamespace(role="user", text="병원비가 부담스러워", kind="text"),
+        SimpleNamespace(role="assistant", text="'의료급여'라는 제도가 있어요. 자세히 알려드릴까요?", kind="text"),
+        SimpleNamespace(role="user", text="아니 됐어, 괜찮아", kind="text"),
+        SimpleNamespace(role="assistant", text="알겠어요, 언제든 말씀해 주세요.", kind="text"),
+        SimpleNamespace(role="user", text="근데 아까 그거 그래도 한번 알려줘 봐", kind="text"),
+    ], welfare_matched=[], welfare_cards={}, slots={}, findings=[])
+    assert _last_offer_text(sess) is not None and "의료급여" in _last_offer_text(sess)
+
+    # 사용자 3턴 이상 지나면 만료
+    sess.messages += [
+        SimpleNamespace(role="assistant", text="네.", kind="text"),
+        SimpleNamespace(role="user", text="날씨 얘기나 하자", kind="text"),
+        SimpleNamespace(role="assistant", text="좋아요.", kind="text"),
+        SimpleNamespace(role="user", text="응", kind="text"),
+    ]
+    assert _last_offer_text(sess) is None
+
+    # STT 오전사 정규화
+    assert "기초연금" in _normalize_utterance("기소연금 나도 받을 수 있나?")
+
+
 def test_situation_memo_mentions_offer_hint():
     sess = _sess("네, 듣고 있어요.", matched=["care-service"])
     memo = _situation_memo(sess)

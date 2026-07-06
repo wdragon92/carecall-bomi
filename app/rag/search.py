@@ -193,8 +193,9 @@ _FOLLOWUP = re.compile(r"그거|그건|그게|저거|거기|어디서|어떻게 
 
 def augment_query(text: str, last_service: str | None) -> str:
     """멀티턴 후속 질문 보강 (가이드 3-3의 결정적 대체).
-    '그거 어떻게 신청해요?' → '기초연금 그거 어떻게 신청해요?'"""
+    '그거 어떻게 신청해요?' → '기초연금 그거 어떻게 신청해요?'
+    상한 28자: "근데 아까 그거 그래도 한번 알려줘 봐"(21자) 같은 자연 대용어 문장 수용."""
     t = (text or "").strip()
-    if last_service and len(t) <= 20 and _FOLLOWUP.search(t) and last_service not in t:
+    if last_service and len(t) <= 28 and _FOLLOWUP.search(t) and last_service not in t:
         return f"{last_service} {t}"
     return t

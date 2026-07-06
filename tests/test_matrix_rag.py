@@ -70,13 +70,15 @@ def test_senior_guard_filters_chunks_and_embeddings_in_sync():
     assert out.embeddings.tolist() == [[0.0, 1.0]]  # 남은 청크의 벡터 행이 함께 따라옴
 
 
-# ---- RG-10: 질의 보강 경계 — 20자 이하 + 후속 신호 어휘 + 이름 미포함일 때만 ----
+# ---- RG-10: 질의 보강 경계 — 28자 이하 + 후속 신호 어휘 + 이름 미포함일 때만 ----
+# (상한 28: "근데 아까 그거 그래도 한번 알려줘 봐"=21자 같은 자연 대용어 문장 수용 — D5 실측)
 def test_augment_query_boundaries():
-    t20 = "그거 신청" + "요" * 15
-    t21 = "그거 신청" + "요" * 16
-    assert len(t20) == 20 and len(t21) == 21
-    assert augment_query(t20, "기초연금").startswith("기초연금 ")
-    assert augment_query(t21, "기초연금") == t21  # 21자 초과 → 미보강
+    t28 = "그거 신청" + "요" * 23
+    t29 = "그거 신청" + "요" * 24
+    assert len(t28) == 28 and len(t29) == 29
+    assert augment_query(t28, "기초연금").startswith("기초연금 ")
+    assert augment_query(t29, "기초연금") == t29  # 29자 초과 → 미보강
+    assert augment_query("근데 아까 그거 그래도 한번 알려줘 봐", "의료급여").startswith("의료급여 ")
 
     assert augment_query("기초연금 신청 어떻게 해요", "기초연금") == "기초연금 신청 어떻게 해요"  # 이름 포함
     assert augment_query("알려줘", "기초연금") == "알려줘"  # '알려줘' 단독은 새 주제일 수 있어 미보강

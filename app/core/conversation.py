@@ -42,6 +42,7 @@ def _is_backchannel(text: str) -> bool:
 
 _DECLINE = re.compile(r"아니|괜찮|됐어|나중|말고|싫")
 _INFO_REQ = re.compile(r"알려|궁금|자세히|말해|들어보")
+_ANAPHORA = re.compile(r"그거|그건|그게|아까|저거")  # 앞선 제안·안내를 가리키는 대용어
 # 이미 송금·이체가 일어난 정황(과거형) — 결정적 행동 카드 트리거
 _FRAUD_SENT = re.compile(r"보냈|보내 ?버렸|송금했|송금해 ?버렸|이체했|입금했|부쳤")
 
@@ -245,15 +246,19 @@ _OFFER_PHRASE = re.compile(r"알려\s*드릴(?:까요|게요)|안내해\s*드릴
 
 
 def _last_offer_text(sess) -> str | None:
-    """직전 보미 '발화'가 복지 제안이었으면 그 발화 원문 (카드 말풍선은 건너뜀 —
-    카드가 턴의 마지막 메시지로 붙는 구조라, 카드를 보면 제안을 놓친다)."""
-    last_ai = next(
-        (m for m in reversed(sess.messages)
-         if m.role == "assistant" and getattr(m, "kind", "text") != "card"),
-        None,
-    )
-    if last_ai is not None and _OFFER_PHRASE.search(last_ai.text):
-        return last_ai.text
+    """최근 보미 '발화' 중 복지 제안 원문 (카드 말풍선은 건너뜀).
+    직전 한 마디만 보지 않고 사용자 2턴 전까지 거슬러 본다 — "아까 그거 알려줘"처럼
+    거절했다가 마음을 바꾸는 흐름에서 제안이 미아가 되지 않게(실측 D5)."""
+    users_seen = 0
+    for m in reversed(sess.messages):
+        if m.role == "user":
+            users_seen += 1
+            if users_seen > 2:  # 그보다 오래된 제안은 만료
+                return None
+            continue
+        if m.role == "assistant" and getattr(m, "kind", "text") != "card":
+            if _OFFER_PHRASE.search(m.text):
+                return m.text
     return None
 
 
@@ -294,8 +299,11 @@ async def _rag_lookup(sess, providers, settings, user_text: str) -> dict | None:
     # 검색은 조용히 돌린다 — '찾는 중' 칩을 매 턴 띄우면 잡담("도레미파솔라시도")에도
     # 검색 UI가 깜빡여 소음이 된다. 칩은 근거를 실제로 찾았을 때(found)만.
     try:
-        # 후속 질문 보강 힌트: 직전 안내 서비스 → 없으면 직전 턴에 제안한 서비스
+        # 후속 질문 보강 힌트: 직전 안내 서비스 → 최근 제안 서비스 →
+        # (대용어 '그거/아까' + 정보 요청일 때만) 발화 키워드 매칭 후보
         hint = (sess.last_rag or {}).get("서비스명") or _offered_service(sess)
+        if hint is None and _ANAPHORA.search(user_text) and _INFO_REQ.search(user_text):
+            hint = _offer_candidate(sess)
         q = augment_query(user_text, hint)
         qvec = (await providers.embed.embed([q]))[0]
     except Exception as exc:  # noqa: BLE001 — 임베딩 실패로 턴을 깨지 않는다
