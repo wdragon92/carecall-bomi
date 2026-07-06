@@ -42,6 +42,20 @@ def test_slots_regex():
                          {"age": None, "household": "single", "income": None})
     assert merged == {"age": 72, "household": "single", "income": None}
 
+    # 정정 발화: 최신 확인값이 기존 값을 이긴다
+    corrected = merge_slots({"age": 72, "household": "single", "income": None},
+                            {"age": 64, "household": None, "income": None})
+    assert corrected["age"] == 64 and corrected["household"] == "single"
+
+
+def test_slots_correction_last_mention_wins():
+    s = slots_from_text("올해 일흔둘이야. 아 잠깐, 아니다 예순넷이야.")
+    assert s["age"] == 64
+    s = slots_from_text("일흔둘이라 그랬나, 지금은 만 74세야")
+    assert s["age"] == 74
+    s = slots_from_text("혼자 살다가 작년부터 영감이랑 같이 살아")
+    assert s["household"] == "couple"
+
 
 def test_rest_screen_endpoint(rag_client):
     r = rag_client.post("/api/rag/screen", json={"slots": {"age": 60}}).json()

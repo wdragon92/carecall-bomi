@@ -24,6 +24,7 @@ class Message(BaseModel):
     ts: datetime = Field(default_factory=_utcnow)
     via: Via = "text"
     tts_text: Optional[str] = None  # 있으면 TTS는 text 대신 이 문장을 읽음(정보 카드용)
+    kind: str = "text"  # "text" | "card" — 카드는 LLM 히스토리에서 요약으로 대체(T2 수치 재발화 차단)
 
 
 class Finding(BaseModel):

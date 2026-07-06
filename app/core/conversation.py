@@ -120,7 +120,7 @@ async def _speak(
             if chunk is not None:
                 fields, live = await refresh_detail(settings, chunk)
                 card_text, tts = compose_card(chunk, fields, live)
-                cmsg = sess.add_message("assistant", card_text, tts_text=tts)
+                cmsg = sess.add_message("assistant", card_text, tts_text=tts, kind="card")
                 bubbles.append({
                     "id": cmsg.id, "text": card_text, "kind": "card",
                     "card": {  # 프론트 구조화 렌더링용 (RAG 근거 가시화)
@@ -187,8 +187,9 @@ def _situation_memo(sess) -> str:
     if sess.findings:
         top = sorted(sess.findings, key=lambda f: _SEV_ORDER.get(f.severity, 9))[:6]
         parts += [f"- 관찰됨({f.category}): {f.content}" for f in top]
-    if sess.welfare_cards:
-        parts.append("- 이미 안내한 복지: " + ", ".join(c["이름"] for c in sess.welfare_cards.values()))
+    guided = [c.get("이름", "") for c in sess.welfare_cards.values() if c.get("이름")]
+    if guided:
+        parts.append("- 이미 안내한 복지: " + ", ".join(guided))
     offer = _offer_candidate(sess)
     if offer:
         parts.append(
@@ -306,8 +307,9 @@ async def _handle_screening(sess, providers, settings, fresh: bool) -> bool:
     prev = {k: v for k, v in sess.slots.items() if not k.startswith("_")}
     got = await _extract_slots(sess, providers)
     merged = rules.merge_slots(prev, got)
+    # 새로 채워졌거나 '정정'된 값도 판정 문맥의 새 정보로 인정
     newly_filled = any(
-        prev.get(k) is None and merged.get(k) is not None for k in ("age", "household", "income")
+        merged.get(k) != prev.get(k) for k in ("age", "household", "income")
     )
     if not fresh and not newly_filled:
         return False  # 되묻기 중인데 새 정보가 없음(딴 얘기) → 일반 턴으로
@@ -328,7 +330,7 @@ async def _handle_screening(sess, providers, settings, fresh: bool) -> bool:
         pkg = build_apply_package(fields, collected_at, url)
         text = package_to_text(pkg)
         cmsg = sess.add_message(
-            "assistant", text, tts_text="기초연금 신청에 필요한 것들을 화면에 카드로 정리해 드렸어요."
+            "assistant", text, kind="card", tts_text="기초연금 신청에 필요한 것들을 화면에 카드로 정리해 드렸어요."
         )
         bubbles.append({"id": cmsg.id, "text": text, "kind": "card"})
         sess.apply_packages["기초연금"] = pkg
@@ -433,7 +435,7 @@ async def handle_image(sess, providers, image_bytes: bytes, fmt: str, name: str,
         doc = await doc_task
         card_text, tts = ocr_doc.compose_doc_card(doc)
         if card_text:
-            cmsg = sess.add_message("assistant", card_text, tts_text=tts)
+            cmsg = sess.add_message("assistant", card_text, tts_text=tts, kind="card")
             await sess.send(
                 {"type": "ai_turn", "bubbles": [{"id": cmsg.id, "text": card_text, "kind": "card"}]}
             )

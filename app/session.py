@@ -64,11 +64,11 @@ class Session:
 
     def add_message(
         self, role: str, text: str, via: str = "text", id: str | None = None,
-        tts_text: str | None = None,
+        tts_text: str | None = None, kind: str = "text",
     ) -> Message:
         self._mcount += 1
         mid = id or f"m{self._mcount}-{secrets.token_hex(3)}"
-        msg = Message(id=mid, role=role, text=text, via=via, tts_text=tts_text)
+        msg = Message(id=mid, role=role, text=text, via=via, tts_text=tts_text, kind=kind)
         self.messages.append(msg)
         self.touch()
         return msg
@@ -80,8 +80,17 @@ class Session:
             self.tts_cache.popitem(last=False)
 
     def history_for_llm(self, limit: int = 40) -> list[dict]:
+        """카드 말풍선은 요약 한 줄로 대체 — 카드 속 금액·기준을 LLM이 히스토리에서 주워
+        말로 반복하는 것(T2 위반)을 차단하되, '무엇을 안내했는지'는 기억하게 한다."""
         msgs = [m for m in self.messages if m.role in ("user", "assistant")][-limit:]
-        return [{"role": m.role, "content": m.text} for m in msgs]
+        out = []
+        for m in msgs:
+            text = m.text
+            if m.kind == "card":
+                title = m.text.split("\n", 1)[0].lstrip("📌📝 ").strip()
+                text = f"(화면 정보 카드로 '{title}'을 보여드렸음 — 수치·신청처는 카드에 있으니 말로 반복하지 않기)"
+            out.append({"role": m.role, "content": text})
+        return out
 
     def transcript_text(self, max_chars: int = 6000) -> str:
         """전체 대화(사용자+상담원). 리포트 생성용."""

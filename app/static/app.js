@@ -31,7 +31,7 @@ function connectWS() {
   const proto = location.protocol === "https:" ? "wss" : "ws";
   const ws = new WebSocket(`${proto}://${location.host}/ws/${state.sessionId}`);
   state.ws = ws;
-  ws.onopen = () => (state.reconnect = 0);
+  ws.onopen = () => { state.reconnect = 0; setBadge("보미가 곁에 있어요"); }; // session_ready가 곧 상세 배지로 갱신
   ws.onmessage = (ev) => { try { handleWS(JSON.parse(ev.data)); } catch (e) {} };
   ws.onclose = () => {
     if (state.reconnect < 3) {
@@ -40,6 +40,7 @@ function connectWS() {
       setTimeout(connectWS, 1500);
     } else {
       setBadge("연결이 불안정해요. 새로고침 해주세요.");
+      toast("연결이 끊겼어요. 화면을 아래로 당겨 새로고침 해주세요.");
     }
   };
   ws.onerror = () => {};
@@ -61,7 +62,7 @@ function handleWS(m) {
       ragStatus(m);
       break;
     case "findings_update":
-      renderFindings(m.findings);
+      renderFindings(m.findings || []);
       break;
     case "welfare_update":
       renderWelfare(m.items);
@@ -200,7 +201,7 @@ function ragStatus(m) {
     chip.textContent = "📖 복지 자료를 찾아보는 중…";
     wrap.classList.remove("hidden");
   } else if (m.status === "found") {
-    chip.textContent = `📚 공식 복지자료 ${m.hits}건에서 근거를 찾았어요`;
+    chip.textContent = `📚 공식 복지자료 ${Number(m.hits) || 0}건에서 근거를 찾았어요`;
     wrap.classList.remove("hidden");
     _chipTimer = setTimeout(() => wrap.classList.add("hidden"), 4000);
   } else {
@@ -273,8 +274,8 @@ function renderFindings(findings) {
     el.className = `card sev-${worst.severity}`;
     el.innerHTML = `
       <div class="flex items-center justify-between">
-        <span class="font-semibold">${CAT_ICON[cat] || "•"} ${cat.replace("_", " ")} <span class="text-xs text-gray-400">${items.length}건</span></span>
-        <span class="text-xs px-2 py-0.5 rounded-full ${sevChip(worst.severity)}">${sevLabel(worst.severity)}</span>
+        <span class="font-semibold">${CAT_ICON[cat] || "•"} ${escapeHtml(cat.replace("_", " "))} <span class="text-xs text-gray-400">${items.length}건</span></span>
+        <span class="text-xs px-2 py-0.5 rounded-full ${sevChip(worst.severity)}">${escapeHtml(sevLabel(worst.severity))}</span>
       </div>
       <ul class="fcat-items"></ul>
       ${anyHuman ? '<div class="mt-1 text-xs font-semibold text-red-600">👤 보호자·담당자 연결 권고</div>' : ""}`;
@@ -326,19 +327,26 @@ function showUrgent(msg, level) {
 /* ================= 입력: 텍스트 ================= */
 function sendUserMessage(text, via = "text", opts = {}) {
   text = (text || "").trim();
-  if (!text || !state.ws || state.ws.readyState !== 1) return;
+  if (!text) return false;
+  if (!state.ws || state.ws.readyState !== 1) {
+    // 연결 안 된 상태에서 조용히 버리면 어르신은 보냈다고 착각 — 알리고 입력은 보존
+    toast("아직 연결 중이에요. 잠시 후 다시 보내주세요.");
+    return false;
+  }
   _turn++;      // 진행 중이던 AI 말풍선 노출 중단
   stopAudio();  // 재생 중이던 음성 중지
   if (!opts.noBubble) appendUserBubble(text);
   state.ws.send(JSON.stringify({ type: "user_message", text, via }));
+  return true;
 }
 function sendFromInput() {
   const inp = $("#text-input");
   const t = inp.value.trim();
   if (!t) return;
-  sendUserMessage(t, "text");
-  inp.value = "";
-  inp.style.height = "auto";
+  if (sendUserMessage(t, "text")) {
+    inp.value = "";
+    inp.style.height = "auto";
+  }
 }
 
 /* ================= 입력: 마이크 (클릭 토글 — 눌러 시작, 다시 눌러 전송) ================= */
@@ -395,7 +403,7 @@ async function startRec() {
   stopAudio(); // 재생 중이던 TTS 중지(녹음에 안 섞이게 + 노출 페이싱 해제)
   $("#mic-hint").classList.remove("hidden");
   const btn = $("#btn-mic");
-  btn.classList.add("bg-red-200");
+  btn.classList.add("btn-rec"); // !important 클래스 — Tailwind 순서 경합 없이 확실한 녹음 표시
   btn.setAttribute("aria-pressed", "true");
   _ctx = new (window.AudioContext || window.webkitAudioContext)();
   try { await _ctx.resume(); } catch (e) {}
@@ -414,7 +422,7 @@ async function stopRec() {
   clearTimeout(_recTimer);
   $("#mic-hint").classList.add("hidden");
   const btn = $("#btn-mic");
-  btn.classList.remove("bg-red-200");
+  btn.classList.remove("btn-rec");
   btn.setAttribute("aria-pressed", "false");
   try {
     _proc.disconnect();
@@ -524,8 +532,11 @@ function downscaleImage(file, maxDim, quality) {
       c.getContext("2d").drawImage(img, 0, 0, width, height);
       resolve(c.toDataURL("image/jpeg", quality));
     };
-    img.onerror = reject;
-    img.src = URL.createObjectURL(file);
+    const url = URL.createObjectURL(file);
+    const done = img.onload; // 위에서 정의한 리사이즈+resolve 핸들러
+    img.onload = () => { try { URL.revokeObjectURL(url); } catch (e) {} done(); };
+    img.onerror = () => { try { URL.revokeObjectURL(url); } catch (e) {} reject(new Error("image load")); };
+    img.src = url;
   });
 }
 
@@ -552,6 +563,8 @@ async function fetchTTS(id) {
   }
 }
 function playBlob(blob) {
+  // resolve(true)=정상 재생(또는 사용자 인터럽트), resolve(false)=재생 자체가 실패
+  // (모바일 자동재생 차단 등) → 호출부가 읽기 딜레이로 폴백해 말풍선이 와르르 쏟아지지 않게.
   return new Promise((resolve) => {
     stopAudio();
     let url;
@@ -559,17 +572,17 @@ function playBlob(blob) {
       url = URL.createObjectURL(blob);
       const a = new Audio(url);
       state.audio = a;
-      state._audioDone = () => {
+      state._audioDone = (played = true) => {
         state._audioDone = null;
         try { URL.revokeObjectURL(url); } catch (e) {}
-        resolve();
+        resolve(played);
       };
-      a.onended = () => state._audioDone && state._audioDone();
-      a.onerror = () => state._audioDone && state._audioDone();
-      a.play().catch(() => state._audioDone && state._audioDone());
+      a.onended = () => state._audioDone && state._audioDone(true);
+      a.onerror = () => state._audioDone && state._audioDone(false);
+      a.play().catch(() => state._audioDone && state._audioDone(false));
     } catch (e) {
       if (url) { try { URL.revokeObjectURL(url); } catch (e2) {} }
-      resolve();
+      resolve(false);
     }
   });
 }
@@ -590,8 +603,10 @@ async function revealTurn(bubbles) {
     if (useVoice && state.voiceOn && !state.recording) {
       const blob = await blobs[i];
       if (myTurn !== _turn) return;
-      if (blob) await playBlob(blob); // 오디오가 끝나야 다음 말풍선 등장 → 음성에 맞춘 페이싱
-      else await _sleep(_readingDelay(bubbles[i].text));
+      // 오디오가 끝나야 다음 말풍선 등장 → 음성 페이싱. 재생 실패(자동재생 차단)면 읽기 딜레이로 폴백
+      const played = blob ? await playBlob(blob) : false;
+      if (myTurn !== _turn) return;
+      if (!played) await _sleep(_readingDelay(bubbles[i].text));
     } else {
       await _sleep(_readingDelay(bubbles[i].text));
     }
@@ -620,7 +635,10 @@ function renderReport(rep) {
     .join("");
   const recs = (rep.recommendations || []).map((r) => `<li class="mb-1">✅ ${escapeHtml(r)}</li>`).join("");
   const welfare = (rep.welfare || []).map((w) => `<li class="mb-1">🤝 ${escapeHtml(w["이름"])} — <span class="text-gray-500 text-sm">${escapeHtml(w["신청처"] || "")}${w["기준일"] ? " · " + escapeHtml(w["기준일"]) + " 기준" : ""}</span></li>`).join("");
-  const pkgs = (rep.apply_packages || []).map((p) => `<li class="mb-1">📝 ${escapeHtml(p["서비스명"])} — ${escapeHtml((p["필요서류"] || []).join(", "))} <span class="text-gray-500 text-sm">(${escapeHtml(p["신청처"] || "")})</span></li>`).join("");
+  const pkgs = (rep.apply_packages || []).map((p) => {
+    const docs = Array.isArray(p["필요서류"]) ? p["필요서류"].join(", ") : String(p["필요서류"] || "");
+    return `<li class="mb-1">📝 ${escapeHtml(p["서비스명"])} — ${escapeHtml(docs)} <span class="text-gray-500 text-sm">(${escapeHtml(p["신청처"] || "")})</span></li>`;
+  }).join("");
   b.innerHTML = `
     <div><h3 class="font-bold mb-1">요약</h3><p class="text-gray-700">${escapeHtml(rep.summary || "")}</p></div>
     <div><h3 class="font-bold mb-1">관찰된 특이사항</h3><ul class="list-none">${findings || '<li class="text-gray-400">없음</li>'}</ul></div>
@@ -646,17 +664,33 @@ function wireUI() {
   $("#file-input").addEventListener("change", (e) => { handleFile(e.target.files[0]); e.target.value = ""; });
 
   $("#btn-voice").addEventListener("click", toggleVoice);
+  $("#btn-voice").classList.toggle("btn-on", state.voiceOn); // 초기 '켜짐' 상태도 시각 표시
   $("#btn-end").addEventListener("click", endSession);
-  $("#btn-close-report").addEventListener("click", () => $("#report-modal").classList.add("hidden"));
+  const closeReport = () => $("#report-modal").classList.add("hidden");
+  $("#btn-close-report").addEventListener("click", closeReport);
+  $("#btn-close-report-x").addEventListener("click", closeReport);
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeReport(); });
 
   $$(".mview-btn").forEach((btn) => btn.addEventListener("click", () => switchMobile(btn.dataset.mview)));
+
+  // 모바일 가상 키보드: 입력 포커스·뷰포트 변화 시 마지막 말풍선이 가려지지 않게
+  inp.addEventListener("focus", () => setTimeout(scrollDown, 150));
+  if (window.visualViewport) window.visualViewport.addEventListener("resize", () => scrollDown());
+
+  // 모바일 자동재생 언락: 첫 사용자 제스처에서 무음 재생 시도 (실패해도 무해)
+  document.addEventListener("pointerdown", () => {
+    try {
+      const a = new Audio("data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YQAAAAA=");
+      a.play().catch(() => {});
+    } catch (e) {}
+  }, { once: true });
 }
 function toggleVoice() {
   state.voiceOn = !state.voiceOn;
   const btn = $("#btn-voice");
   btn.setAttribute("aria-pressed", String(state.voiceOn));
   btn.textContent = state.voiceOn ? "🔊 음성" : "🔇 음성";
-  btn.classList.toggle("bg-blue-100", state.voiceOn);
+  btn.classList.toggle("btn-on", state.voiceOn);
   if (!state.voiceOn) stopAudio();
 }
 function switchMobile(view) {

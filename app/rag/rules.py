@@ -94,34 +94,39 @@ _ONES = {"하나": 1, "한": 1, "둘": 2, "두": 2, "셋": 3, "세": 3, "넷": 4
 
 
 def slots_from_text(text: str) -> dict:
-    """결정적 슬롯 추출 폴백. LLM 없이도 데모가 동작하게."""
+    """결정적 슬롯 추출 폴백. LLM 없이도 데모가 동작하게.
+    같은 슬롯이 여러 번 언급되면 **마지막 언급**을 채택한다 — "일흔둘이야 … 아니 예순넷이야"
+    같은 정정 발화에서 최신 값이 이겨야 merge_slots(정정 우선)와 아귀가 맞는다."""
     t = text or ""
     out: dict = {"age": None, "household": None, "income": None}
 
-    m = re.search(r"(?:만\s*)?(\d{2})\s*(?:살|세)", t)
-    if m:
-        out["age"] = int(m.group(1))
-    else:
-        for tens, tv in _TENS.items():
-            if tens in t:
-                out["age"] = tv
-                for ones, ov in _ONES.items():
-                    if re.search(tens + r"\s*" + ones, t):
-                        out["age"] = tv + ov
-                        break
-                break
+    age_pos = -1
+    for m in re.finditer(r"(?:만\s*)?(\d{2})\s*(?:살|세)", t):
+        out["age"], age_pos = int(m.group(1)), m.start()
+    for tens, tv in _TENS.items():
+        for m in re.finditer(tens, t):
+            if m.start() <= age_pos:
+                continue
+            age = tv
+            tail = t[m.end(): m.end() + 4]
+            for ones, ov in _ONES.items():
+                if re.match(r"\s*" + ones, tail):
+                    age = tv + ov
+                    break
+            out["age"], age_pos = age, m.start()
 
-    if re.search(r"혼자|독거|나 혼자|홀로", t):
-        out["household"] = "single"
-    elif re.search(r"부부|배우자|영감|할멈|같이 살|둘이 살", t):
-        out["household"] = "couple"
+    single = [m.start() for m in re.finditer(r"혼자|독거|홀로", t)]
+    couple = [m.start() for m in re.finditer(r"부부|배우자|영감|할멈|같이 살|둘이 살", t)]
+    if single or couple:
+        out["household"] = "single" if max(single or [-1]) > max(couple or [-1]) else "couple"
     return out
 
 
 def merge_slots(base: dict, new: dict) -> dict:
-    """이미 아는 값은 유지, 새로 알게 된 값만 채움."""
+    """새로 확인된 값이 우선(정정 반영: "아니 예순넷이야"), 새 정보가 없으면 기존 유지.
+    슬롯 추출은 사용자 발화 전체를 다시 보므로 최신 추출값이 곧 최신 사실이다."""
     out = dict(base or {})
     for k in ("age", "household", "income"):
-        if out.get(k) is None and new.get(k) is not None:
+        if new.get(k) is not None:
             out[k] = new[k]
     return out
