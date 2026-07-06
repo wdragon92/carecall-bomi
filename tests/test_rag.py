@@ -63,14 +63,15 @@ def test_hybrid_retrieve_ranks_and_scores():
     assert "주거급여" in bm25_top2
 
     qv = asyncio.run(embed.embed([q]))[0]
-    retrieved, top = hybrid_retrieve(rt, qv, q, k=4)
-    assert len(retrieved) == 4 and top > 0.0
+    r = hybrid_retrieve(rt, qv, q, k=4)
+    assert len(r.items) == 4 and r.top_score > 0.0
+    assert r.bm25_top > 0.0  # '월세' 어휘 증거
 
     # 카드 고유 어휘('치매')는 목 융합에서도 최상위 진입
     q2 = "치매 약값이 걱정이에요"
     qv2 = asyncio.run(embed.embed([q2]))[0]
-    retrieved2, _ = hybrid_retrieve(rt, qv2, q2, k=4)
-    names2 = [c.fields["서비스명"] for c, _ in retrieved2]
+    r2 = hybrid_retrieve(rt, qv2, q2, k=4)
+    names2 = [c.fields["서비스명"] for c, _ in r2.items]
     assert "치매치료관리비 지원" in names2[:2]
 
 

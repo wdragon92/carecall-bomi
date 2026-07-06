@@ -11,7 +11,7 @@ from app.core import prompts, welfare
 from app.rag import rules
 from app.rag.answer import compose_card, pick_card, rag_prompt_block, refresh_detail
 from app.rag.apply import build_apply_package, package_to_text
-from app.rag.search import augment_query, hybrid_retrieve
+from app.rag.search import augment_query, hybrid_retrieve, passes_gate
 from app.services.base import ProviderError
 
 log = logging.getLogger("conv")
@@ -143,12 +143,12 @@ async def _rag_lookup(sess, providers, settings, user_text: str) -> dict | None:
     except Exception as exc:  # noqa: BLE001 — 임베딩 실패로 턴을 깨지 않는다
         log.warning("rag embed failed (%s) → chit-chat path", exc)
         return None
-    retrieved, top = hybrid_retrieve(rt, qvec, q, k=settings.rag_top_k, pool=settings.rag_pool)
-    thr = settings.rag_threshold(providers.modes.get("embed", "mock"))
-    log.info("rag lookup top=%.3f thr=%.2f q=%s", top, thr, q[:40])
-    if not retrieved or top < thr:
+    r = hybrid_retrieve(rt, qvec, q, k=settings.rag_top_k, pool=settings.rag_pool)
+    ok = passes_gate(r, settings, providers.modes.get("embed", "mock"))
+    log.info("rag lookup top=%.3f bm25=%.1f gate=%s q=%s", r.top_score, r.bm25_top, ok, q[:40])
+    if not ok:
         return None
-    return {"retrieved": retrieved, "block": rag_prompt_block(retrieved), "top": top}
+    return {"retrieved": r.items, "block": rag_prompt_block(r.items), "top": r.top_score}
 
 
 def _basic_pension_fields(providers) -> tuple[dict, str, str]:

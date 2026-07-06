@@ -1,11 +1,14 @@
 """검색 계층 (v2 §4-3, 가이드 2-3/3-3 포팅).
 - 하이브리드: 벡터(FAISS) + BM25(kiwipiepy 토큰) → RRF 융합
-- 거부 판정은 반드시 '벡터 top_score'로만 한다 — RRF 점수는 유사도가 아님(가이드 경고)
+- 거부 게이트는 RRF 점수가 아니라(유사도 아님 — 가이드 경고) 벡터 top_score + BM25 증거의
+  2단 판정: top ≥ high(고신뢰) OR (top ≥ low AND bm25 ≥ evidence). 구어체 질의는 벡터
+  분포가 겹쳐(실측: in 0.413~ / out ~0.479) 단일 임계값으로 분리 불가하기 때문.
 - 질의 보강: 짧은 지시어 후속 질문에 직전 서비스명을 결정적으로 덧붙임(LLM 재작성 대체)"""
 from __future__ import annotations
 
 import logging
 import re
+from dataclasses import dataclass, field
 
 import numpy as np
 
@@ -83,13 +86,22 @@ def load_runtime(settings, embed_mode: str) -> RagRuntime | None:
     return rt
 
 
+@dataclass
+class Retrieval:
+    """하이브리드 검색 결과 + 거부 게이트용 신호."""
+
+    items: list[tuple[DocChunk, float]] = field(default_factory=list)  # RRF 상위 k
+    top_score: float = 0.0  # 벡터 top1 코사인 (의미 신호)
+    bm25_top: float = 0.0   # BM25 최고점 (어휘 증거 신호)
+
+
 def hybrid_retrieve(
     rt: RagRuntime, qvec, qtext: str, k: int = 4, pool: int = 20, rrf_k: int = 60,
-) -> tuple[list[tuple[DocChunk, float]], float]:
-    """벡터+BM25 RRF 융합 상위 k와, 거부 판정용 '벡터 top_score'(코사인)를 함께 반환."""
+) -> Retrieval:
+    """벡터+BM25 RRF 융합 상위 k + 게이트 신호(벡터 top1, BM25 top)."""
     n = len(rt.chunks)
     if n == 0 or qvec is None:
-        return [], 0.0
+        return Retrieval()
     pool = min(pool, n)
 
     vscores, vidx = rt.vindex.search(qvec, pool)
@@ -98,15 +110,27 @@ def hybrid_retrieve(
     fused: dict[int, float] = {}
     for r, i in enumerate(vidx):
         fused[i] = fused.get(i, 0.0) + 1.0 / (rrf_k + r + 1)
+    bm25_top = 0.0
     if rt.bm25 is not None:
         bscores = rt.bm25.get_scores(tokenize(qtext))
+        bm25_top = float(np.max(bscores)) if len(bscores) else 0.0
         for r, i in enumerate(np.argsort(-bscores)[:pool]):
             if bscores[i] <= 0:  # BM25 0점(토큰 미교집합)은 순위 기여 없음
                 break
             fused[int(i)] = fused.get(int(i), 0.0) + 1.0 / (rrf_k + r + 1)
 
     order = sorted(fused.items(), key=lambda x: -x[1])[:k]
-    return [(rt.chunks[i], s) for i, s in order], top_score
+    return Retrieval([(rt.chunks[i], s) for i, s in order], top_score, bm25_top)
+
+
+def passes_gate(r: Retrieval, settings, embed_mode: str) -> bool:
+    """복지 접지 여부 2단 판정 (실측 근거: scripts/eval_rag.py).
+    고신뢰 의미 매칭이거나, 중간 의미 + 뚜렷한 어휘 증거일 때만 통과."""
+    if not r.items:
+        return False
+    low = settings.rag_threshold(embed_mode)
+    high = settings.rag_threshold_high(embed_mode)
+    return r.top_score >= high or (r.top_score >= low and r.bm25_top >= settings.rag_bm25_evidence)
 
 
 _FOLLOWUP = re.compile(r"그거|그건|그게|저거|거기|어디서|어떻게 해|신청|서류|얼마")

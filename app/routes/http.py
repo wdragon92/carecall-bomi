@@ -77,15 +77,19 @@ async def rag_answer_once(request: Request) -> dict:
         raise HTTPException(status_code=503, detail="rag index not loaded (build_index.py 실행 필요)")
 
     try:
-        retrieved, top, thr = await retrieve_for(providers, s, question)
+        r, ok = await retrieve_for(providers, s, question)
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=502, detail=f"embed failed: {exc}")
 
-    if not retrieved or top < thr:
-        return {"answer": REJECT_ANSWER, "rejected": True, "top_score": round(top, 3),
-                "threshold": thr, "sources": [], "card": None, "live": False}
+    emode = providers.modes.get("embed", "mock")
+    gate = {"low": s.rag_threshold(emode), "high": s.rag_threshold_high(emode),
+            "bm25_evidence": s.rag_bm25_evidence}
+    if not ok:
+        return {"answer": REJECT_ANSWER, "rejected": True, "top_score": round(r.top_score, 3),
+                "bm25_top": round(r.bm25_top, 2), "gate": gate,
+                "sources": [], "card": None, "live": False}
 
-    system = prompts.chat_system(rag_prompt_block(retrieved), rag=True)
+    system = prompts.chat_system(rag_prompt_block(r.items), rag=True)
     messages = [{"role": "system", "content": system}, {"role": "user", "content": question}]
     try:
         answer = await providers.llm.chat(messages, max_tokens=500, temperature=0.5, top_p=0.8)
@@ -94,14 +98,15 @@ async def rag_answer_once(request: Request) -> dict:
         answer = await providers.mllm.chat(messages, max_tokens=500)
 
     card_text, live = None, False
-    chunk = pick_card(retrieved, answer)
+    chunk = pick_card(r.items, answer)
     if chunk is not None:
         fields, live = await refresh_detail(s, chunk)
         card_text, _tts = compose_card(chunk, fields, live)
 
     return {
-        "answer": answer, "rejected": False, "top_score": round(top, 3), "threshold": thr,
-        "sources": [{"source": c.source, "rrf": round(sc, 4)} for c, sc in retrieved],
+        "answer": answer, "rejected": False, "top_score": round(r.top_score, 3),
+        "bm25_top": round(r.bm25_top, 2), "gate": gate,
+        "sources": [{"source": c.source, "rrf": round(sc, 4)} for c, sc in r.items],
         "card": card_text, "live": live,
     }
 

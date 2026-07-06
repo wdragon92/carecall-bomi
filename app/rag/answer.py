@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 
 from app.rag.schema import DocChunk
-from app.rag.search import RagRuntime, hybrid_retrieve
+from app.rag.search import RagRuntime, Retrieval, hybrid_retrieve, passes_gate
 
 log = logging.getLogger("rag.answer")
 
@@ -82,12 +82,11 @@ def pick_card(retrieved: list[tuple[DocChunk, float]], llm_text: str) -> DocChun
     return withf[0][0]
 
 
-async def retrieve_for(providers, settings, question: str) -> tuple[list, float, float]:
-    """질의 임베딩 → 하이브리드 검색. 반환: (retrieved, top_score, threshold)."""
+async def retrieve_for(providers, settings, question: str) -> tuple[Retrieval, bool]:
+    """질의 임베딩 → 하이브리드 검색 + 게이트 판정. 반환: (Retrieval, 통과 여부)."""
     rt: RagRuntime | None = providers.rag
     if rt is None:
-        return [], 0.0, 1.0
+        return Retrieval(), False
     qvec = (await providers.embed.embed([question]))[0]
-    retrieved, top = hybrid_retrieve(rt, qvec, question, k=settings.rag_top_k, pool=settings.rag_pool)
-    thr = settings.rag_threshold(providers.modes.get("embed", "mock"))
-    return retrieved, top, thr
+    r = hybrid_retrieve(rt, qvec, question, k=settings.rag_top_k, pool=settings.rag_pool)
+    return r, passes_gate(r, settings, providers.modes.get("embed", "mock"))

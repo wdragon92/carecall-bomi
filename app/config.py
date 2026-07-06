@@ -35,8 +35,12 @@ class Settings(BaseSettings):
     rag_data_dir: str = "data"
     rag_top_k: int = 4
     rag_pool: int = 20
-    rag_score_threshold: float = 0.41       # 실 임베딩(bge-m3 코사인) 거부 임계값 — 실측 in 0.42~/out ~0.40, P4에서 재튜닝
-    rag_score_threshold_mock: float = 0.06  # 목 n-gram 벡터용 — 실측 in 0.064~/out ~0.054의 중간
+    # 거부 게이트(2단, P4 실측): top ≥ high(고신뢰) OR (top ≥ low AND bm25 ≥ evidence)
+    rag_score_threshold: float = 0.40        # low — 실 임베딩 하한 (in-domain 최저 0.413)
+    rag_score_threshold_high: float = 0.50   # high — 어휘 증거 없이도 통과하는 고신뢰선
+    rag_score_threshold_mock: float = 0.06   # 목 n-gram low (실측 in 0.064~/out ~0.054)
+    rag_score_threshold_mock_high: float = 0.12  # 목 high
+    rag_bm25_evidence: float = 4.0           # 어휘 증거 하한 (in 4.10~10.96 / out 대부분 <4)
     rag_rewrite: bool = False               # LLM 질문 재작성(실모드 전용, 기본 off — 지연 1콜 추가)
 
     # 공공데이터포털 (P0 후 채움 — 발급은 사용자, Decoding 키만)
@@ -70,8 +74,15 @@ class Settings(BaseSettings):
         return bool(self.clova_ocr_invoke_url.strip() and self.clova_ocr_secret.strip())
 
     def rag_threshold(self, embed_mode: str) -> float:
-        """거부 판정 임계값 — 임베딩 종류(real/mock)에 따라 분포가 달라 분리."""
+        """게이트 하한(low) — 임베딩 종류(real/mock)에 따라 분포가 달라 분리."""
         return self.rag_score_threshold if embed_mode == "real" else self.rag_score_threshold_mock
+
+    def rag_threshold_high(self, embed_mode: str) -> float:
+        """게이트 고신뢰선(high) — 어휘 증거 없이도 접지."""
+        return (
+            self.rag_score_threshold_high if embed_mode == "real"
+            else self.rag_score_threshold_mock_high
+        )
 
 
 @lru_cache
