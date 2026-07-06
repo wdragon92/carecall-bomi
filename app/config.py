@@ -43,9 +43,12 @@ class Settings(BaseSettings):
     rag_bm25_evidence: float = 4.0           # 어휘 증거 하한 (in 4.10~10.96 / out 대부분 <4)
     rag_rewrite: bool = False               # LLM 질문 재작성(실모드 전용, 기본 off — 지연 1콜 추가)
 
-    # 공공데이터포털 — 키만 채우면 됨(Decoding 키). URL은 실경로 검증 완료(2026-07-06,
-    # 무키 호출 시 401 / 오경로 404·500 대조로 확인). 응답 포맷 XML.
-    welfare_api_key: str = ""
+    # 공공데이터포털 — 서비스(중앙부처/지자체)별로 키·엔드포인트 한 벌씩.
+    # 계정 공용 키(포털 정책상 두 페이지 키가 같은 값)라면 같은 값을 두 칸에 넣으면 된다.
+    # URL은 실경로 검증 완료(2026-07-06, 무키 401 / 오경로 404·500 대조). 응답 포맷 XML.
+    welfare_central_api_key: str = ""  # 중앙부처복지서비스(15090532) Decoding 키
+    welfare_local_api_key: str = ""    # 지자체복지서비스(15108347) Decoding 키
+    welfare_api_key: str = ""          # (공용 폴백 — 서비스별 키가 비어 있으면 이 값 사용)
     welfare_central_list_url: str = (
         "https://apis.data.go.kr/B554287/NationalWelfareInformationsV001/NationalWelfarelistV001"
     )
@@ -58,6 +61,11 @@ class Settings(BaseSettings):
     welfare_local_detail_url: str = (
         "https://apis.data.go.kr/B554287/LocalGovernmentWelfareInformations/LcgvWelfaredetailed"
     )
+
+    def welfare_key(self, scope: str) -> str:
+        """scope: 'central' | 'local'. 서비스별 키 우선, 없으면 공용 키."""
+        specific = self.welfare_central_api_key if scope == "central" else self.welfare_local_api_key
+        return (specific or self.welfare_api_key).strip()
 
     # 앱 파라미터
     app_host: str = "127.0.0.1"

@@ -14,8 +14,9 @@ log = logging.getLogger("rag.fetch")
 
 _P0_MSG = (
     "공공데이터포털 수집은 P0 완료 후 활성화됩니다: "
-    "1) 활용신청(중앙부처 15090532 / 지자체 15108347) 후 Decoding 키를 .env WELFARE_API_KEY에, "
-    "2) 샘플 응답을 knowledge/samples/central.json·local.json 으로 저장, "
+    "1) 활용신청(중앙부처 15090532 / 지자체 15108347) 후 Decoding 키를 .env의 "
+    "WELFARE_CENTRAL_API_KEY / WELFARE_LOCAL_API_KEY에, "
+    "2) 샘플 응답을 knowledge/samples/central.xml·local.xml 로 저장, "
     "3) fetch.parse_items_* / cards.service_to_card 매핑 작성. "
     "지금은 `python build_index.py --source fixtures` 를 사용하세요."
 )
@@ -23,8 +24,8 @@ _P0_MSG = (
 
 async def api_cards(settings) -> list[DocChunk]:
     """중앙부처+지자체 복지서비스 전체 수집 → 복지카드 목록.
-    URL은 config 기본값(실경로 검증 완료), 키만 .env에 있으면 됨."""
-    if not settings.welfare_api_key.strip():
+    URL은 config 기본값(실경로 검증 완료), 서비스별 키만 .env에 있으면 됨."""
+    if not settings.welfare_key("central") and not settings.welfare_key("local"):
         raise RuntimeError(_P0_MSG)
     raise NotImplementedError(_P0_MSG)  # TODO(P0): 샘플 응답 확보 후 parse_items_* + service_to_card
 
@@ -58,9 +59,9 @@ def parse_items_local(resp) -> list[dict]:
     raise NotImplementedError(_P0_MSG)
 
 
-async def fetch_detail(settings, serv_id: str, timeout: float = 3.0) -> dict | None:
+async def fetch_detail(settings, serv_id: str, scope: str = "central", timeout: float = 3.0) -> dict | None:
     """상세조회 1건 (실시간 이중화, v2 §4-5). 실패 시 None → 호출부가 캐시로 폴백.
-    TODO(P0): detail URL·파라미터명·응답 파싱 확정."""
-    if not settings.welfare_api_key.strip() or not settings.welfare_central_detail_url.strip():
+    TODO(P0): 파라미터명·응답 파싱 확정."""
+    if not settings.welfare_key(scope):
         return None
     return None
