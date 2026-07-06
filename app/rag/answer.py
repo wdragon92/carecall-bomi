@@ -54,8 +54,8 @@ def compose_card(chunk: DocChunk, fields: dict, live: bool) -> tuple[str, str]:
         lines.append(f"· 지역: {fields['지역']}")
     if fields.get("지원대상"):
         lines.append(f"· 대상: {fields['지원대상']}")
-    if fields.get("지원내용"):
-        lines.append(f"· 지원: {fields['지원내용']}")
+    if fields.get("지원내용") and fields["지원내용"] != fields.get("지원대상"):
+        lines.append(f"· 지원: {fields['지원내용']}")  # 대상과 동일 문구 복제 방지(구 인덱스 호환)
     if fields.get("신청방법"):
         lines.append(f"· 신청: {fields['신청방법']}")
     if fields.get("구비서류"):

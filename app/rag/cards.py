@@ -110,10 +110,15 @@ def service_to_card(svc: dict, scope: str, collected_at: str) -> DocChunk:
     if related:
         lines.append(f"관련어: {related}")
 
+    # 대상·내용이 둘 다 summary 폴백이면 카드에 같은 문장이 두 줄 복제됨(실측: 무릎인공관절)
+    field_target = _clean(target or summary, 180)
+    field_benefit = _clean(benefit or summary, 220)
+    if field_benefit == field_target:
+        field_benefit = _clean(benefit, 220)  # 원본이 비면 빈 값 — compose_card가 줄 생략
     fields = {
         "서비스명": name,
-        "지원대상": _clean(target or summary, 180),
-        "지원내용": _clean(benefit or summary, 220),
+        "지원대상": field_target,
+        "지원내용": field_benefit,
         "신청방법": _clean(apply_, 180) or "주민센터·복지로에서 확인",
         "문의처": _clean(contact, 80) or "보건복지상담센터 129",
         "구비서류": "",
