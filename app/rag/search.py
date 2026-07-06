@@ -97,8 +97,11 @@ class Retrieval:
 
 def hybrid_retrieve(
     rt: RagRuntime, qvec, qtext: str, k: int = 4, pool: int = 20, rrf_k: int = 60,
+    min_vec: float = 0.0,
 ) -> Retrieval:
-    """벡터+BM25 RRF 융합 상위 k + 게이트 신호(벡터 top1, BM25 top)."""
+    """벡터+BM25 RRF 융합 상위 k + 게이트 신호(벡터 top1, BM25 top).
+    min_vec: 항목별 벡터 유사도 하한 — 'top4 고집' 대신 기준 미달 항목은 결과에서 제외
+    (컨텍스트·카드·패널에 관련 낮은 자료가 끼는 것 방지)."""
     n = len(rt.chunks)
     if n == 0 or qvec is None:
         return Retrieval()
@@ -106,6 +109,7 @@ def hybrid_retrieve(
 
     vscores, vidx = rt.vindex.search(qvec, pool)
     top_score = float(vscores[0]) if vscores else 0.0
+    vec_of = {int(i): float(s) for s, i in zip(vscores, vidx)}
 
     fused: dict[int, float] = {}
     for r, i in enumerate(vidx):
@@ -120,7 +124,8 @@ def hybrid_retrieve(
             fused[int(i)] = fused.get(int(i), 0.0) + 1.0 / (rrf_k + r + 1)
 
     order = sorted(fused.items(), key=lambda x: -x[1])[:k]
-    return Retrieval([(rt.chunks[i], s) for i, s in order], top_score, bm25_top)
+    items = [(rt.chunks[i], s) for i, s in order if vec_of.get(i, 0.0) >= min_vec]
+    return Retrieval(items, top_score, bm25_top)
 
 
 def passes_gate(r: Retrieval, settings, embed_mode: str) -> bool:

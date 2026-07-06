@@ -44,6 +44,8 @@ class Settings(BaseSettings):
     rag_score_threshold_mock_high: float = 0.12  # 목 high
     rag_bm25_evidence: float = 12.0          # 어휘 증거 하한 (실 557청크 기준)
     rag_bm25_evidence_mock: float = 4.0      # 목/소형 코퍼스용
+    rag_item_min: float = 0.45               # 항목별 벡터 하한 — top4 고집 없이 기준 미달 제외
+    rag_item_min_mock: float = 0.03
     rag_rewrite: bool = False               # LLM 질문 재작성(실모드 전용, 기본 off — 지연 1콜 추가)
 
     # 공공데이터포털 — 서비스(중앙부처/지자체)별로 키·엔드포인트 한 벌씩.
@@ -109,6 +111,10 @@ class Settings(BaseSettings):
     def rag_bm25_min(self, embed_mode: str) -> float:
         """어휘 증거 하한 — BM25 절대값은 코퍼스 크기에 민감해 모드별 분리."""
         return self.rag_bm25_evidence if embed_mode == "real" else self.rag_bm25_evidence_mock
+
+    def rag_item_threshold(self, embed_mode: str) -> float:
+        """검색 결과 항목별 벡터 하한 (관련 낮은 자료의 컨텍스트 유입 차단)."""
+        return self.rag_item_min if embed_mode == "real" else self.rag_item_min_mock
 
 
 @lru_cache

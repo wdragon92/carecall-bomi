@@ -106,5 +106,7 @@ async def retrieve_for(providers, settings, question: str) -> tuple[Retrieval, b
     if rt is None:
         return Retrieval(), False
     qvec = (await providers.embed.embed([question]))[0]
-    r = hybrid_retrieve(rt, qvec, question, k=settings.rag_top_k, pool=settings.rag_pool)
-    return r, passes_gate(r, settings, providers.modes.get("embed", "mock"))
+    emode = providers.modes.get("embed", "mock")
+    r = hybrid_retrieve(rt, qvec, question, k=settings.rag_top_k, pool=settings.rag_pool,
+                        min_vec=settings.rag_item_threshold(emode))
+    return r, passes_gate(r, settings, emode)

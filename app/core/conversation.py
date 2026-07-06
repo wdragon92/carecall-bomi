@@ -162,8 +162,10 @@ async def _rag_lookup(sess, providers, settings, user_text: str) -> dict | None:
         log.warning("rag embed failed (%s) → chit-chat path", exc)
         await sess.send({"type": "rag_status", "status": "none"})
         return None
-    r = hybrid_retrieve(rt, qvec, q, k=settings.rag_top_k, pool=settings.rag_pool)
-    ok = passes_gate(r, settings, providers.modes.get("embed", "mock"))
+    emode = providers.modes.get("embed", "mock")
+    r = hybrid_retrieve(rt, qvec, q, k=settings.rag_top_k, pool=settings.rag_pool,
+                        min_vec=settings.rag_item_threshold(emode))
+    ok = passes_gate(r, settings, emode)
     log.info("rag lookup top=%.3f bm25=%.1f gate=%s q=%s", r.top_score, r.bm25_top, ok, q[:40])
     if not ok:
         await sess.send({"type": "rag_status", "status": "none"})

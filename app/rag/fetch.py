@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import xml.etree.ElementTree as ET
 from datetime import date
 
@@ -118,9 +119,23 @@ async def fetch_all(client: httpx.AsyncClient, list_url: str, key: str,
     return out
 
 
+# 생애주기 미표기 행에서 비어르신 대상 제도를 걸러내는 제외어 (근로자·청년·양육 등)
+_EXCLUDE = re.compile(
+    r"청년|영유아|아동|어린이|청소년|임산|임신|출산|신혼|보육|육아|학생|대학|병사|장병|군인|근로자|사업주|직장인"
+)
+
+
 def _keep_age(row: dict, life_key: str) -> bool:
+    """어르신 대상 필터: 생애주기에 '노년'이 있으면 유지, 다른 생애주기만 있으면 제외,
+    미표기면 서비스명·요약·대상특성에 비어르신 제외어가 없을 때만 유지."""
     life = row.get(life_key, "")
-    return (not life) or (AGE_TOKEN in life)
+    if life:
+        return AGE_TOKEN in life
+    blob = " ".join([
+        row.get("servNm", ""), row.get("servDgst", ""),
+        row.get("trgterIndvdlArray") or row.get("trgterIndvdlNmArray", ""),
+    ])
+    return not _EXCLUDE.search(blob)
 
 
 async def api_cards(settings, age_filter: bool = True, progress=None) -> list[DocChunk]:

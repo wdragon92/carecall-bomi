@@ -43,7 +43,7 @@ def by_ids(ids: list[str]) -> list[dict]:
     return out
 
 
-async def push_welfare(sess, limit: int = 5) -> None:
+async def push_welfare(sess, limit: int = 4) -> None:
     """복지 패널 갱신 단일 지점 — RAG 카드(근거·기준일 보유) 우선 + 정적 매칭 병합.
     추출/RAG 두 소스가 패널을 번갈아 덮어쓰는 깜빡임을 없앤다."""
     items: list[dict] = list(sess.welfare_cards.values())
@@ -67,9 +67,9 @@ def merged_for_report(sess, limit: int = 6) -> list[dict]:
     return out[:limit]
 
 
-def match(signals: list[str], text: str, limit: int = 5) -> list[dict]:
-    """추출 신호 + 사용자 발화 키워드로 복지 항목 매칭 후 관련도 상위 N개.
-    키워드 매칭(구체적)을 신호 매칭(광범위)보다 높게 가중해 targeted하게 추린다."""
+def match(signals: list[str], text: str, limit: int = 3) -> list[dict]:
+    """사용자 발화 '키워드 직접 일치'가 있는 항목만 매칭 (맥락 기반 절제).
+    신호(저소득 등)만으로는 노출하지 않음 — 패널에 범용 복지가 우르르 뜨는 것 방지."""
     items = load_items()
     if not items:
         return []
@@ -77,10 +77,10 @@ def match(signals: list[str], text: str, limit: int = 5) -> list[dict]:
     scored: list[tuple[int, object]] = []
     for it in items:
         kw = sum(1 for k in it.키워드 if k and k in text)
-        sg = len(sigset & set(it.signals))
-        score = kw * 3 + sg
-        if score > 0:
-            scored.append((score, it))
+        if kw == 0:  # 키워드 직접 일치 필수
+            continue
+        score = kw * 3 + len(sigset & set(it.signals))
+        scored.append((score, it))
     scored.sort(key=lambda x: -x[0])
     return [
         {"id": it.id, "이름": it.이름, "한줄": it.한줄, "신청처": it.신청처}
