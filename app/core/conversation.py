@@ -96,7 +96,8 @@ async def _speak(
 
     if card_ctx and settings is not None:
         try:  # 카드 실패가 턴을 깨지 않게
-            chunk = pick_card(card_ctx["retrieved"], full)
+            chunk = pick_card(card_ctx["retrieved"], full,
+                              strict=providers.modes.get("llm") == "real")
             if chunk is not None:
                 fields, live = await refresh_detail(settings, chunk)
                 card_text, tts = compose_card(chunk, fields, live)

@@ -72,11 +72,16 @@ def compose_card(chunk: DocChunk, fields: dict, live: bool) -> tuple[str, str]:
 _NEGATION = re.compile(r"없습니다|없어요|없네요|않습니다|않아요|찾지 못|확인되지 않|해당하지 않|존재하지 않")
 
 
-def pick_card(retrieved: list[tuple[DocChunk, float]], llm_text: str) -> DocChunk | None:
-    """카드로 보여줄 1건 (카드 = 답변의 시각화, 검색의 시각화가 아님).
-    1) AI가 실제 언급한 서비스명 매칭(공백 무시) 우선.
-    2) 매칭 실패 시: 답변이 부정('없습니다' 등)이면 카드 생략 — 존재하지 않는 정책을
-       물었을 때 검색 1위(무관 서비스)가 붙는 모순 방지. 부정이 아니면 검색 1위 폴백.
+def pick_card(
+    retrieved: list[tuple[DocChunk, float]], llm_text: str, strict: bool = False,
+) -> DocChunk | None:
+    """카드로 보여줄 1건 (카드 = '답변'의 시각화, 검색 결과의 시각화가 아님).
+    1) AI가 실제 언급한 서비스명 매칭(공백 무시)만 신뢰.
+    2) 매칭 실패 시:
+       - strict(실 LLM): 카드 생략 — 적대적 질문('전 국민 100만원?')에서 검색 1위
+         (어휘 우연 일치한 무관 서비스)가 붙는 모순을 원천 차단. 프롬프트가 서비스명을
+         그대로 부르게 하므로 정상 안내에서는 이름이 매칭된다.
+       - lenient(목 LLM, 정형 응답): 부정('없습니다' 등)만 아니면 검색 1위 폴백.
     PDF 청크(fields 없음)는 카드 불가."""
     withf = [(c, s) for c, s in retrieved if c.fields]
     if not withf:
@@ -90,7 +95,7 @@ def pick_card(retrieved: list[tuple[DocChunk, float]], llm_text: str) -> DocChun
         base_n = re.sub(r"\s+", "", c.fields.get("서비스명", "").split("(")[0])
         if base_n and base_n in text_n:
             return c
-    if _NEGATION.search(llm_text or ""):
+    if strict or _NEGATION.search(llm_text or ""):
         return None
     return withf[0][0]
 

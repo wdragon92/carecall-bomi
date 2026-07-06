@@ -202,6 +202,9 @@ function hideTyping() {
 /* ================= 특이사항 / 복지 패널 ================= */
 const CAT_ICON = { 건강: "🩺", 정서: "💗", 인지: "🧩", 사기_노출: "⚠️", 복지_니즈: "🤝", 긴급: "🚨" };
 const SEV_RANK = { 높음: 3, 보통: 2, 낮음: 1 };
+// 표시 라벨 — 내부 값(낮음/보통/높음)은 그대로, 보호자에게 와닿는 말로만 변환
+const SEV_LABEL = { 높음: "위험", 보통: "주의", 낮음: "참고" };
+const sevLabel = (s) => SEV_LABEL[s] || s;
 /* 특이사항: 항목별 팝업 대신 카테고리로 묶어 전체를 한눈에, 조용히 갱신 */
 function renderFindings(findings) {
   const box = $("#tab-findings");
@@ -232,7 +235,7 @@ function renderFindings(findings) {
     el.innerHTML = `
       <div class="flex items-center justify-between">
         <span class="font-semibold">${CAT_ICON[cat] || "•"} ${cat.replace("_", " ")} <span class="text-xs text-gray-400">${items.length}건</span></span>
-        <span class="text-xs px-2 py-0.5 rounded-full ${sevChip(worst.severity)}">${worst.severity}</span>
+        <span class="text-xs px-2 py-0.5 rounded-full ${sevChip(worst.severity)}">${sevLabel(worst.severity)}</span>
       </div>
       <ul class="fcat-items"></ul>
       ${anyHuman ? '<div class="mt-1 text-xs font-semibold text-red-600">👤 보호자·담당자 연결 권고</div>' : ""}`;
@@ -571,7 +574,7 @@ async function endSession() {
 function renderReport(rep) {
   const b = $("#report-body");
   const findings = (rep.findings || [])
-    .map((f) => `<li class="mb-1"><b>${escapeHtml(f.category.replace("_", " "))}</b> (${f.severity}) — ${escapeHtml(f.content)}${f.needs_human ? " 👤" : ""}</li>`)
+    .map((f) => `<li class="mb-1"><b>${escapeHtml(f.category.replace("_", " "))}</b> (${sevLabel(f.severity)}) — ${escapeHtml(f.content)}${f.needs_human ? " 👤" : ""}</li>`)
     .join("");
   const recs = (rep.recommendations || []).map((r) => `<li class="mb-1">✅ ${escapeHtml(r)}</li>`).join("");
   const welfare = (rep.welfare || []).map((w) => `<li class="mb-1">🤝 ${escapeHtml(w["이름"])} — <span class="text-gray-500 text-sm">${escapeHtml(w["신청처"] || "")}${w["기준일"] ? " · " + escapeHtml(w["기준일"]) + " 기준" : ""}</span></li>`).join("");

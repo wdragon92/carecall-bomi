@@ -98,7 +98,7 @@ async def rag_answer_once(request: Request) -> dict:
         answer = await providers.mllm.chat(messages, max_tokens=500)
 
     card_text, live = None, False
-    chunk = pick_card(r.items, answer)
+    chunk = pick_card(r.items, answer, strict=providers.modes.get("llm") == "real")
     if chunk is not None:
         fields, live = await refresh_detail(s, chunk)
         card_text, _tts = compose_card(chunk, fields, live)
