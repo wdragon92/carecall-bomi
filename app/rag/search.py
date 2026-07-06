@@ -130,7 +130,9 @@ def passes_gate(r: Retrieval, settings, embed_mode: str) -> bool:
         return False
     low = settings.rag_threshold(embed_mode)
     high = settings.rag_threshold_high(embed_mode)
-    return r.top_score >= high or (r.top_score >= low and r.bm25_top >= settings.rag_bm25_evidence)
+    return r.top_score >= high or (
+        r.top_score >= low and r.bm25_top >= settings.rag_bm25_min(embed_mode)
+    )
 
 
 _FOLLOWUP = re.compile(r"그거|그건|그게|저거|거기|어디서|어떻게 해|신청|서류|얼마")

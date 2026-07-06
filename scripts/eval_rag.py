@@ -24,7 +24,7 @@ IN_SET = [
     ("의료급여", "병원비가 무서워서 아파도 병원엘 못 가겠어"),
     ("주거급여", "월세 내기가 너무 버거워"),
     ("긴급복지", "갑자기 일을 못 하게 돼서 당장 살길이 막막해"),
-    ("노인맞춤돌봄", "무릎이 아파서 장 보러 가기가 힘들어"),
+    ("노인맞춤돌봄|무릎인공관절", "무릎이 아파서 장 보러 가기가 힘들어"),  # 실 API에선 수술지원이 더 정확
     ("에너지바우처", "겨울에 난방비가 무서워서 보일러를 못 틀어"),
     ("응급안전안심", "혼자 있다가 쓰러지면 어쩌나 겁이 나"),
     ("노인일자리", "소일거리라도 해서 용돈이라도 벌고 싶은데"),
@@ -69,7 +69,7 @@ async def main() -> int:
     else:
         embedder = MockEmbed(s)
     gate_desc = (f"top>={s.rag_threshold_high(embed_mode)} OR "
-                 f"(top>={s.rag_threshold(embed_mode)} AND bm25>={s.rag_bm25_evidence})")
+                 f"(top>={s.rag_threshold(embed_mode)} AND bm25>={s.rag_bm25_min(embed_mode)})")
     print(f"[eval] chunks={len(rt.chunks)} embed={embed_mode} gate: {gate_desc}")
 
     hits = {1: 0, 2: 0, 4: 0}
@@ -81,7 +81,8 @@ async def main() -> int:
         qv = (await embedder.embed([q]))[0]
         r = hybrid_retrieve(rt, qv, q, k=args.k, pool=s.rag_pool)
         names = [_norm((c.fields or {}).get("서비스명", "")) for c, _ in r.items]
-        rank = next((i + 1 for i, n in enumerate(names) if _norm(gold) in n), 0)
+        golds = [_norm(g) for g in gold.split("|")]
+        rank = next((i + 1 for i, n in enumerate(names) if any(g in n for g in golds)), 0)
         for k in hits:
             if rank and rank <= k:
                 hits[k] += 1

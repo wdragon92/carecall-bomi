@@ -35,12 +35,15 @@ class Settings(BaseSettings):
     rag_data_dir: str = "data"
     rag_top_k: int = 4
     rag_pool: int = 20
-    # 거부 게이트(2단, P4 실측): top ≥ high(고신뢰) OR (top ≥ low AND bm25 ≥ evidence)
-    rag_score_threshold: float = 0.40        # low — 실 임베딩 하한 (in-domain 최저 0.413)
-    rag_score_threshold_high: float = 0.50   # high — 어휘 증거 없이도 통과하는 고신뢰선
-    rag_score_threshold_mock: float = 0.06   # 목 n-gram low (실측 in 0.064~/out ~0.054)
+    # 거부 게이트(2단): top ≥ high(고신뢰) OR (top ≥ low AND bm25 ≥ evidence)
+    # 실측(557청크 코퍼스): in top 0.478~0.670·bm25 12.5~24.6 / out top ~0.521·bm25 로또14.3
+    # → BM25 절대값은 코퍼스 크기에 따라 커지므로 재빌드 규모 변경 시 eval_rag로 재튜닝할 것
+    rag_score_threshold: float = 0.47        # low — 실 임베딩 하한
+    rag_score_threshold_high: float = 0.55   # high — 어휘 증거 없이도 통과하는 고신뢰선
+    rag_score_threshold_mock: float = 0.06   # 목 n-gram low (12장 픽스처 기준 실측)
     rag_score_threshold_mock_high: float = 0.12  # 목 high
-    rag_bm25_evidence: float = 4.0           # 어휘 증거 하한 (in 4.10~10.96 / out 대부분 <4)
+    rag_bm25_evidence: float = 12.0          # 어휘 증거 하한 (실 557청크 기준)
+    rag_bm25_evidence_mock: float = 4.0      # 목/소형 코퍼스용
     rag_rewrite: bool = False               # LLM 질문 재작성(실모드 전용, 기본 off — 지연 1콜 추가)
 
     # 공공데이터포털 — 서비스(중앙부처/지자체)별로 키·엔드포인트 한 벌씩.
@@ -101,6 +104,10 @@ class Settings(BaseSettings):
             self.rag_score_threshold_high if embed_mode == "real"
             else self.rag_score_threshold_mock_high
         )
+
+    def rag_bm25_min(self, embed_mode: str) -> float:
+        """어휘 증거 하한 — BM25 절대값은 코퍼스 크기에 민감해 모드별 분리."""
+        return self.rag_bm25_evidence if embed_mode == "real" else self.rag_bm25_evidence_mock
 
 
 @lru_cache
