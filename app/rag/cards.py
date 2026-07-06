@@ -11,6 +11,23 @@ from app.rag.schema import DocChunk
 
 KNOWLEDGE_DIR = Path(__file__).resolve().parents[2] / "knowledge"
 
+BOKJIRO_HOME = "https://www.bokjiro.go.kr"
+_BOKJIRO_DETAIL = (
+    "https://www.bokjiro.go.kr/ssis-tbu/twataa/wlfareInfo/moveTWAT52011M.do"
+    "?wlfareInfoId={sid}&wlfareInfoReldBztpCd=01"
+)
+
+
+def card_url(chunk: DocChunk) -> str:
+    """카드 링크 폴백 체인 — 모든 카드에 링크가 '항상' 달리게 하는 단일 지점.
+    수집된 딥링크 → servId 기반 복지로 상세 → 복지로 홈."""
+    if (chunk.url or "").startswith("http"):
+        return chunk.url
+    sid = chunk.serv_id or ""
+    if sid.startswith("WLF"):
+        return _BOKJIRO_DETAIL.format(sid=sid)
+    return BOKJIRO_HOME
+
 
 def fixture_cards(path: Path | None = None, collected_at: str | None = None) -> list[DocChunk]:
     """수기 정리본 welfare.json 12종 → 복지카드. P0(공공데이터 키) 없이도 전체 파이프라인 구동용."""
@@ -47,6 +64,7 @@ def fixture_cards(path: Path | None = None, collected_at: str | None = None) -> 
                 source=f"복지자료 {year}·{it['이름']}",
                 source_type="fixture",
                 serv_id=f"fixture-{it['id']}",
+                url=it.get("링크", ""),
                 fields=fields,
                 collected_at=today,
             )

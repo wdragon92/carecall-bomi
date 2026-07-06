@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import re
 
+from app.rag.cards import card_url
 from app.rag.schema import DocChunk
 from app.rag.search import RagRuntime, Retrieval, hybrid_retrieve, passes_gate
 
@@ -62,8 +63,7 @@ def compose_card(chunk: DocChunk, fields: dict, live: bool) -> tuple[str, str]:
     lines.append(f"· 문의: {fields.get('문의처') or '보건복지상담센터 129'}")
     if chunk.collected_at:
         lines.append(f"· 정보 기준일: {chunk.collected_at}" + (" · 방금 확인" if live else ""))
-    if chunk.url:
-        lines.append(f"· 복지로: {chunk.url}")
+    lines.append(f"· 복지로: {card_url(chunk)}")  # 링크는 폴백 체인으로 항상 부착
     tts = f"{name}의 지원 내용과 신청 방법은 화면에 정보 카드로 정리해 드렸어요."
     return "\n".join(lines), tts
 

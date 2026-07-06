@@ -2,7 +2,6 @@
 
   python build_index.py --source fixtures          # welfare.json 12종 (P0 전 기본)
   python build_index.py --source api               # 공공데이터포털 (P0 완료 후)
-  python build_index.py --source pdf               # knowledge/pdf/*.pdf (트랙 B)
   python build_index.py --source all --force       # 전체 재임베딩
 
 증분: 텍스트가 같은 카드는 기존 벡터 재사용 → 2회차부터 임베딩 호출 급감.
@@ -27,7 +26,7 @@ def _pick_embedder(s):
 
 async def _main() -> int:
     ap = argparse.ArgumentParser(description="build welfare RAG index")
-    ap.add_argument("--source", choices=["fixtures", "api", "pdf", "all"], default="fixtures")
+    ap.add_argument("--source", choices=["fixtures", "api", "all"], default="fixtures")
     ap.add_argument("--data-dir", default=None, help="default: settings.rag_data_dir")
     ap.add_argument("--force", action="store_true", help="ignore previous index (full re-embed)")
     args = ap.parse_args()
@@ -50,13 +49,6 @@ async def _main() -> int:
         api = await fetch.api_cards(s, progress=lambda m: print(f"[build_index] {m}"))
         print(f"[build_index] api: {len(api)} cards")
         chunks += api
-    if args.source in ("pdf", "all"):
-        from app.rag import pdf
-
-        pc = pdf.pdf_cards()
-        print(f"[build_index] pdf: {len(pc)} chunks (knowledge/pdf)")
-        chunks += pc
-
     if not chunks:
         print("[build_index] no chunks to index - nothing to do")
         return 1

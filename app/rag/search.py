@@ -66,6 +66,24 @@ class RagRuntime:
         return cls(loaded.chunks, VectorIndex(loaded.embeddings), bm25, dict(loaded.meta))
 
 
+def _senior_only(loaded: LoadedIndex) -> LoadedIndex:
+    """어르신 적합성 소급 가드 — 필터 이전에 빌드된 인덱스가 배포돼 있어도
+    로드 시점에 청년·근로자 제도를 걷어낸다 (정책: app/rag/senior.py 단일 원천)."""
+    from app.rag.senior import chunk_senior_relevant
+
+    keep = [i for i, c in enumerate(loaded.chunks) if chunk_senior_relevant(c)]
+    if len(keep) == len(loaded.chunks):
+        return loaded
+    log.info("senior guard: %d -> %d chunks (비어르신 제도 %d건 제외)",
+             len(loaded.chunks), len(keep), len(loaded.chunks) - len(keep))
+    return LoadedIndex(
+        chunks=[loaded.chunks[i] for i in keep],
+        embeddings=loaded.embeddings[keep] if len(loaded.embeddings) else loaded.embeddings,
+        meta=dict(loaded.meta),
+        hashes=loaded.hashes,
+    )
+
+
 def load_runtime(settings, embed_mode: str) -> RagRuntime | None:
     """인덱스 로드 + embed_mode 가드. 목으로 빌드한 인덱스를 실 벡터로 검색하면
     조용히 엉터리 결과가 나오므로 모드 불일치는 미로드 처리한다."""
@@ -80,7 +98,7 @@ def load_runtime(settings, embed_mode: str) -> RagRuntime | None:
             "rebuild: python build_index.py", built_mode, embed_mode,
         )
         return None
-    rt = RagRuntime.from_loaded(loaded)
+    rt = RagRuntime.from_loaded(_senior_only(loaded))
     log.info("RAG index loaded: %d chunks (embed=%s, built %s)",
              len(rt.chunks), built_mode, loaded.meta.get("built_at", "?"))
     return rt
@@ -140,7 +158,8 @@ def passes_gate(r: Retrieval, settings, embed_mode: str) -> bool:
     )
 
 
-_FOLLOWUP = re.compile(r"그거|그건|그게|저거|거기|어디서|어떻게 해|신청|서류|얼마")
+# '알려줘' 단독은 새 주제 질문("로또 번호 알려줘")에도 흔해 오증강 위험 — '자세히'만 후속 신호로 인정
+_FOLLOWUP = re.compile(r"그거|그건|그게|저거|거기|어디서|어떻게 해|신청|서류|얼마|자세히")
 
 
 def augment_query(text: str, last_service: str | None) -> str:

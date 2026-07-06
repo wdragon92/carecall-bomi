@@ -46,6 +46,7 @@ class WelfareItem(BaseModel):
     조건: str = ""
     금액: str = ""
     신청처: str = ""
+    링크: str = ""  # 복지로 상세 URL (수기 검증본)
     signals: list[str] = Field(default_factory=list)
     키워드: list[str] = Field(default_factory=list)
 

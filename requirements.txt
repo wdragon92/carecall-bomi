@@ -11,4 +11,3 @@ faiss-cpu>=1.9
 numpy>=1.26
 rank_bm25>=0.2.2
 kiwipiepy>=0.18
-pypdf>=4.0

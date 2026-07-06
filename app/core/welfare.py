@@ -8,6 +8,7 @@ from functools import lru_cache
 from pathlib import Path
 
 from app.models import WelfareItem
+from app.rag.cards import BOKJIRO_HOME
 
 log = logging.getLogger("welfare")
 _PATH = Path(__file__).resolve().parent.parent.parent / "knowledge" / "welfare.json"
@@ -25,21 +26,14 @@ def load_items() -> list[WelfareItem]:
         return []
 
 
-def get_digest(max_items: int = 12) -> str:
-    items = load_items()
-    if not items:
-        return ""
-    lines = [f"- {it.이름}: {it.한줄} (대상 {it.대상}; 금액 {it.금액}; 신청 {it.신청처})" for it in items[:max_items]]
-    return "\n".join(lines)
-
-
 def by_ids(ids: list[str]) -> list[dict]:
     index = {it.id: it for it in load_items()}
     out: list[dict] = []
     for i in ids:
         it = index.get(i)
         if it:
-            out.append({"id": it.id, "이름": it.이름, "한줄": it.한줄, "신청처": it.신청처})
+            out.append({"id": it.id, "이름": it.이름, "한줄": it.한줄,
+                        "신청처": it.신청처, "url": it.링크 or BOKJIRO_HOME})
     return out
 
 
@@ -83,6 +77,7 @@ def match(signals: list[str], text: str, limit: int = 3) -> list[dict]:
         scored.append((score, it))
     scored.sort(key=lambda x: -x[0])
     return [
-        {"id": it.id, "이름": it.이름, "한줄": it.한줄, "신청처": it.신청처}
+        {"id": it.id, "이름": it.이름, "한줄": it.한줄,
+         "신청처": it.신청처, "url": it.링크 or BOKJIRO_HOME}
         for _, it in scored[:limit]
     ]

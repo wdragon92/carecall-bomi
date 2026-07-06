@@ -9,12 +9,12 @@ from dataclasses import asdict, dataclass
 
 @dataclass
 class DocChunk:
-    text: str                 # 임베딩 대상 텍스트 (복지카드 또는 PDF 청크)
-    source: str               # "복지자료 2026·기초연금" | "긴급복지안내 p12" | "복지로/중앙부처 WLF-000123"
-    source_type: str = "api"  # "api" | "pdf" | "fixture"
+    text: str                 # 임베딩 대상 텍스트 (복지카드)
+    source: str               # "복지자료 2026·기초연금" | "복지로/중앙부처 WLF-000123"
+    source_type: str = "api"  # "api" | "fixture"
     serv_id: str = ""         # 상세조회·변경감지 키 (api serv id / "fixture-{id}")
     url: str = ""             # 복지로 상세/신청 딥링크
-    fields: dict | None = None  # 구조화 필드 원본 — T2 응답의 슬롯 소스 (api/fixture만)
+    fields: dict | None = None  # 구조화 필드 원본 — T2 응답의 슬롯 소스
     collected_at: str = ""    # 수집일 YYYY-MM-DD ("정보 기준일" 표시용)
 
 

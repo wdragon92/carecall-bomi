@@ -12,7 +12,7 @@ def build_apply_package(fields: dict, collected_at: str = "", url: str = "") -> 
     return {
         "서비스명": fields.get("서비스명", ""),
         "신청처": fields.get("신청방법", "") or "주민센터",
-        "온라인신청": url or "복지로 www.bokjiro.go.kr",
+        "온라인신청": url or "https://www.bokjiro.go.kr",
         "필요서류": checklist,
         "문의": fields.get("문의처", "") or "보건복지상담센터 129",
         "기준일": collected_at,

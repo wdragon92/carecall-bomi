@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import re
 import xml.etree.ElementTree as ET
 from datetime import date
 
@@ -80,21 +79,27 @@ def _parse_detail(xml_text: str) -> dict:
 
 async def _get_xml(client: httpx.AsyncClient, url: str, key: str, params: dict,
                    timeout: float = 20.0, tries: int = 4) -> str:
-    """GET + 429 지수 백오프. 예외 메시지에 URL(=serviceKey)을 절대 담지 않는다(로그 유출 방지)."""
+    """GET + 재시도(429 및 일시 네트워크 오류 지수 백오프 — 포털이 간헐적으로 연결을 끊는다).
+    예외 메시지에 URL(=serviceKey)을 절대 담지 않는다(로그 유출 방지)."""
     delay = 2.0
+    last = "HTTP 429"
     for _ in range(tries):
         try:
             r = await client.get(url, params={"serviceKey": key, **params}, timeout=timeout)
         except httpx.HTTPError as exc:
-            raise RuntimeError(f"net:{type(exc).__name__}") from None
+            last = f"net:{type(exc).__name__}"
+            await asyncio.sleep(delay)
+            delay *= 2
+            continue
         if r.status_code == 429:  # 데이터포털 과속 제한 — 기다렸다 재시도
+            last = "HTTP 429"
             await asyncio.sleep(delay)
             delay *= 2
             continue
         if r.status_code != 200:
             raise RuntimeError(f"HTTP {r.status_code}") from None
         return r.text
-    raise RuntimeError("HTTP 429 (retries exhausted)")
+    raise RuntimeError(f"{last} (retries exhausted)")
 
 
 async def fetch_all(client: httpx.AsyncClient, list_url: str, key: str,
@@ -119,23 +124,22 @@ async def fetch_all(client: httpx.AsyncClient, list_url: str, key: str,
     return out
 
 
-# 생애주기 미표기 행에서 비어르신 대상 제도를 걸러내는 제외어 (근로자·청년·양육 등)
-_EXCLUDE = re.compile(
-    r"청년|영유아|아동|어린이|청소년|임산|임신|출산|신혼|보육|육아|학생|대학|병사|장병|군인|근로자|사업주|직장인"
-)
-
-
 def _keep_age(row: dict, life_key: str) -> bool:
-    """어르신 대상 필터: 생애주기에 '노년'이 있으면 유지, 다른 생애주기만 있으면 제외,
-    미표기면 서비스명·요약·대상특성에 비어르신 제외어가 없을 때만 유지."""
+    """어르신 대상 필터 v3 (정책은 senior.senior_relevant 단일 원천):
+    - 생애주기에 '노년'이 없으면 제외.
+    - '노년'이 있어도 다중 태그 나열(청년,중장년,노년…)일 수 있으므로
+      서비스명·대상 본문으로 어르신 적합성을 한 번 더 판정.
+    - 생애주기 미표기(전 연령성)는 본문 판정만으로 결정."""
+    from app.rag.senior import senior_relevant
+
     life = row.get(life_key, "")
-    if life:
-        return AGE_TOKEN in life
-    blob = " ".join([
-        row.get("servNm", ""), row.get("servDgst", ""),
+    if life and AGE_TOKEN not in life:
+        return False
+    target = " ".join(filter(None, [
+        row.get("servDgst", ""),
         row.get("trgterIndvdlArray") or row.get("trgterIndvdlNmArray", ""),
-    ])
-    return not _EXCLUDE.search(blob)
+    ]))
+    return senior_relevant(row.get("servNm", ""), target)
 
 
 async def api_cards(settings, age_filter: bool = True, progress=None) -> list[DocChunk]:
