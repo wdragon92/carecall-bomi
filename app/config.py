@@ -30,8 +30,9 @@ class Settings(BaseSettings):
     ncp_secret_key: str = ""
     ncp_region: str = "KR"
 
-    # 접속 후 첫 인사까지 지연(초) — 브라우저 자동재생 정책·화면 안착 대기 (테스트는 0)
-    greet_delay_seconds: float = 3.0
+    # 접속 후 첫 인사까지 지연(초) — 화면 안착 대기. 자동재생 차단은 프론트가
+    # 첫 터치 때 인사 TTS를 재시도하는 방식으로 보완 (테스트는 0)
+    greet_delay_seconds: float = 1.0
 
     # RAG — 복지 검색 (docs/돌봄콜_RAG_파이프라인_계획_v2.md)
     rag_enabled: bool = True

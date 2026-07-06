@@ -602,6 +602,7 @@ function playBlob(blob) {
 async function revealTurn(bubbles) {
   const myTurn = ++_turn;
   stopAudio();
+  state._retryBlob = null; // 새 턴이 시작되면 이전 재생 실패분은 폐기
   hideTyping();
   const useVoice = state.voiceOn && !state.recording;
   // 음성이면 이번 턴 말풍선들의 TTS를 미리 병렬 요청(말풍선 사이 끊김 방지)
@@ -616,10 +617,14 @@ async function revealTurn(bubbles) {
     if (useVoice && state.voiceOn && !state.recording) {
       const blob = await blobs[i];
       if (myTurn !== _turn) return;
-      // 오디오가 끝나야 다음 말풍선 등장 → 음성 페이싱. 재생 실패(자동재생 차단)면 읽기 딜레이로 폴백
+      // 오디오가 끝나야 다음 말풍선 등장 → 음성 페이싱. 재생 실패(자동재생 차단)면
+      // 읽기 딜레이로 폴백하되, 블롭을 보관해 첫 사용자 터치 때 다시 들려준다(첫 인사 무음 방지)
       const played = blob ? await playBlob(blob) : false;
       if (myTurn !== _turn) return;
-      if (!played) await _sleep(_readingDelay(bubbles[i].text));
+      if (!played) {
+        if (blob) state._retryBlob = blob;
+        await _sleep(_readingDelay(bubbles[i].text));
+      }
     } else {
       await _sleep(_readingDelay(bubbles[i].text));
     }
@@ -690,12 +695,17 @@ function wireUI() {
   inp.addEventListener("focus", () => setTimeout(scrollDown, 150));
   if (window.visualViewport) window.visualViewport.addEventListener("resize", () => scrollDown());
 
-  // 모바일 자동재생 언락: 첫 사용자 제스처에서 무음 재생 시도 (실패해도 무해)
+  // 모바일 자동재생 언락: 첫 사용자 제스처에서 무음 재생 + 차단됐던 인사 TTS 재시도
   document.addEventListener("pointerdown", () => {
     try {
       const a = new Audio("data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YQAAAAA=");
       a.play().catch(() => {});
     } catch (e) {}
+    if (state._retryBlob && state.voiceOn && !state.recording) {
+      const b = state._retryBlob;
+      state._retryBlob = null;
+      playBlob(b); // 첫 제스처가 전송/마이크면 해당 핸들러의 stopAudio가 곧바로 정리
+    }
   }, { once: true });
 }
 function toggleVoice() {
