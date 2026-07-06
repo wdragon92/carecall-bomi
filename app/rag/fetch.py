@@ -22,10 +22,11 @@ _P0_MSG = (
 
 
 async def api_cards(settings) -> list[DocChunk]:
-    """중앙부처+지자체 복지서비스 전체 수집 → 복지카드 목록."""
-    if not settings.welfare_api_key.strip() or not settings.welfare_central_list_url.strip():
+    """중앙부처+지자체 복지서비스 전체 수집 → 복지카드 목록.
+    URL은 config 기본값(실경로 검증 완료), 키만 .env에 있으면 됨."""
+    if not settings.welfare_api_key.strip():
         raise RuntimeError(_P0_MSG)
-    raise NotImplementedError(_P0_MSG)  # TODO(P0): fetch_all + parse_items_* + service_to_card
+    raise NotImplementedError(_P0_MSG)  # TODO(P0): 샘플 응답 확보 후 parse_items_* + service_to_card
 
 
 async def fetch_all(client: httpx.AsyncClient, list_url: str, service_key: str,

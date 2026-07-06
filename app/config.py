@@ -43,11 +43,21 @@ class Settings(BaseSettings):
     rag_bm25_evidence: float = 4.0           # 어휘 증거 하한 (in 4.10~10.96 / out 대부분 <4)
     rag_rewrite: bool = False               # LLM 질문 재작성(실모드 전용, 기본 off — 지연 1콜 추가)
 
-    # 공공데이터포털 (P0 후 채움 — 발급은 사용자, Decoding 키만)
+    # 공공데이터포털 — 키만 채우면 됨(Decoding 키). URL은 실경로 검증 완료(2026-07-06,
+    # 무키 호출 시 401 / 오경로 404·500 대조로 확인). 응답 포맷 XML.
     welfare_api_key: str = ""
-    welfare_central_list_url: str = ""
-    welfare_central_detail_url: str = ""
-    welfare_local_list_url: str = ""
+    welfare_central_list_url: str = (
+        "https://apis.data.go.kr/B554287/NationalWelfareInformationsV001/NationalWelfarelistV001"
+    )
+    welfare_central_detail_url: str = (
+        "https://apis.data.go.kr/B554287/NationalWelfareInformationsV001/NationalWelfaredetailedV001"
+    )
+    welfare_local_list_url: str = (
+        "https://apis.data.go.kr/B554287/LocalGovernmentWelfareInformations/LcgvWelfarelist"
+    )
+    welfare_local_detail_url: str = (
+        "https://apis.data.go.kr/B554287/LocalGovernmentWelfareInformations/LcgvWelfaredetailed"
+    )
 
     # 앱 파라미터
     app_host: str = "127.0.0.1"
