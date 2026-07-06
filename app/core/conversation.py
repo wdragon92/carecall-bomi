@@ -303,10 +303,29 @@ async def handle_image(sess, providers, image_bytes: bytes, fmt: str, name: str,
         )
         return
 
-    sess.ocr_texts.append(ocr_text)
+    # 문서 종류 분류(카드용)는 설명 생성과 병렬 실행 — 지연 최소화. classify는 예외를 내지 않음.
+    import asyncio
+
+    from app.core import ocr_doc
+
+    doc_task = asyncio.ensure_future(ocr_doc.classify_document(providers, ocr_text))
     messages = [
         {"role": "system", "content": prompts.OCR_EXPLAIN + ocr_text},
         {"role": "user", "content": "이 내용을 쉽게 설명해 주세요."},
     ]
-    await _speak(sess, providers, messages, max_tokens=500)
+    await _speak(sess, providers, messages, max_tokens=400)
+
+    doc = None
+    try:  # 카드 실패가 턴을 깨지 않게 (RAG 카드와 동일 원칙)
+        doc = await doc_task
+        card_text, tts = ocr_doc.compose_doc_card(doc)
+        if card_text:
+            cmsg = sess.add_message("assistant", card_text, tts_text=tts)
+            await sess.send(
+                {"type": "ai_turn", "bubbles": [{"id": cmsg.id, "text": card_text, "kind": "card"}]}
+            )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("doc card failed (%s) — 설명만 전송", exc)
+    # 추출 파이프라인에 문서 종류 문맥 제공 (예: [문자·메시지] 스미싱 원문)
+    sess.ocr_texts.append(f"[{doc.종류}] {ocr_text}" if doc else ocr_text)
     _spawn_extract(sess, providers)  # OCR 내용 반영해 특이사항 갱신

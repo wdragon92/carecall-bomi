@@ -18,17 +18,22 @@ _ALLOWED = {"jpg", "jpeg", "png", "pdf", "tif", "tiff"}
 
 
 def _reconstruct(data: dict) -> str:
+    """images 전체(다페이지 PDF 포함)를 페이지 단위로 합친다. 저신뢰 필드는 노이즈로 컷."""
     if not isinstance(data, dict):
         return ""
-    images = data.get("images") or []
-    if not images:
-        return ""
-    fields = images[0].get("fields") or []
-    parts: list[str] = []
-    for f in fields:
-        parts.append(f.get("inferText", ""))
-        parts.append("\n" if f.get("lineBreak") else " ")
-    return "".join(parts).strip()
+    pages: list[str] = []
+    for img in data.get("images") or []:
+        parts: list[str] = []
+        for f in img.get("fields") or []:
+            conf = f.get("inferConfidence")
+            if isinstance(conf, (int, float)) and conf < 0.3:
+                continue
+            parts.append(f.get("inferText", ""))
+            parts.append("\n" if f.get("lineBreak") else " ")
+        page = "".join(parts).strip()
+        if page:
+            pages.append(page)
+    return "\n\n".join(pages)
 
 
 class ClovaOCR:

@@ -160,6 +160,15 @@ _OCR_SMS = (
     "아래 링크를 눌러 주소를 확인해 주세요. http://bit.ly/xxə9\n"
     "미확인 시 자동 폐기됩니다."
 )
+_OCR_WELFARE = (
+    "○○구청 어르신복지과\n"
+    "기초연금 신청 안내\n"
+    "귀하께서는 올해 만 65세가 되어 기초연금을 신청하실 수 있습니다.\n"
+    "신청 기간: 2026년 7월 1일부터 7월 31일까지\n"
+    "신청 장소: 주소지 주민센터 또는 복지로 누리집\n"
+    "준비물: 신분증, 본인 명의 통장사본\n"
+    "문의: 주민센터 또는 보건복지상담센터 129"
+)
 
 
 class MockOCR:
@@ -170,6 +179,8 @@ class MockOCR:
         low = name.lower()
         if any(k in low for k in ("문자", "sms", "smish", "link", "택배")):
             return _OCR_SMS
+        if any(k in low for k in ("복지", "안내", "연금", "우편", "notice", "welfare")):
+            return _OCR_WELFARE
         return _OCR_BILL
 
 

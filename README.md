@@ -58,7 +58,10 @@ python run.py                 # → http://127.0.0.1:8080
 | CLOVA Studio (LLM) | ✅ 실연동 확인 | 채팅 HCX-005 / 분석 HCX-007 |
 | CLOVA Speech (STT) | ✅ 실연동 확인 | TTS→STT 왕복 전사 정확 |
 | CLOVA Voice (TTS) | ✅ 실연동 확인 | vmikyung 프리미엄 보이스 |
-| CLOVA OCR | ⚠️ endpoint 404 | invoke URL 형식은 정상 → **도메인 배포 상태/URL 재확인 필요**. 현재 mock 폴백으로 동작 |
+| CLOVA OCR | ⚠️ endpoint 404 | APIGW가 "URL not found"(errorCode 300) 반환 → **콘솔에서 도메인 [배포] 실행 또는 Invoke URL 재복사 필요**. 현재 mock 폴백으로 동작 |
+
+> 📄 **문서 인식 카드**: 사진을 올리면 무슨 문서인지(고지서/복지 안내문/문자 등) 분류해 쉬운 설명 + 큰 글씨 요약 카드로 안내.
+> 카드의 금액·날짜는 LLM이 아니라 **코드가 OCR 원문에서 그대로** 옮긴다(수치 환각 차단). mock에서도 파일명에 `복지`/`문자` 포함 시 시나리오 동작.
 
 ## 테스트
 ```powershell
