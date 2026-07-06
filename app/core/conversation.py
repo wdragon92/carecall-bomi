@@ -201,9 +201,15 @@ def _situation_memo(sess) -> str:
 
 
 def _offer_candidate(sess) -> str | None:
-    """추출이 패널에 매칭해 둔 복지 중 아직 대화로 안내하지 않은 첫 항목."""
+    """패널에 매칭된 복지 중 아직 안내하지 않은 첫 항목.
+    비동기 추출(HCX-007)이 아직 안 끝났으면 결정적 키워드 매칭으로 즉석 폴백 —
+    '응 알려줘'의 라우팅이 추출 지연에 좌우되지 않게."""
     guided = {c.get("이름") for c in sess.welfare_cards.values()}
-    for it in welfare.by_ids(sess.welfare_matched):
+    ids = list(sess.welfare_matched)
+    if not ids:
+        transcript = sess.user_transcript()[-800:] if hasattr(sess, "user_transcript") else ""
+        ids = [m["id"] for m in welfare.match([], transcript)]
+    for it in welfare.by_ids(ids):
         if it["이름"] not in guided:
             return it["이름"]
     return None
@@ -390,7 +396,8 @@ async def handle_turn(sess, providers, settings) -> None:
     # 질의 체인: 제안 서비스명/제안 원문 → (명시적 정보 요청이면) 패널 매칭 후보.
     # 제안 원문이 게이트에 못 미쳐도 어르신 발화에서 매칭된 후보로 한 번 더 시도한다.
     card_ctx = None
-    if _accepts_offer(user_text):
+    accepted = _accepts_offer(user_text)
+    if accepted:
         queries = []
         oq = _offer_query(sess)
         if oq:
@@ -404,7 +411,9 @@ async def handle_turn(sess, providers, settings) -> None:
             if card_ctx:
                 bc = False
                 break
-    if card_ctx is None and not bc:
+    # 수락형 발화("응 자세히 알려줘")는 일반 검색으로 흘리지 않는다 — 기능어 위주라
+    # 어휘 우연으로 게이트를 뚫고 무관 자료가 접지되는 사고 실측(응급안전안심 등).
+    if card_ctx is None and not bc and not accepted:
         card_ctx = await _rag_lookup(sess, providers, settings, user_text)
 
     # 동일 턴 위험신호 주입 — 결정적 안전망(scan)은 즉시 계산되므로, 배너(비동기 추출)와
