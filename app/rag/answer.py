@@ -68,9 +68,16 @@ def compose_card(chunk: DocChunk, fields: dict, live: bool) -> tuple[str, str]:
     return "\n".join(lines), tts
 
 
+# 부정 답변 신호 — "그런 정책은 없습니다" 류. 이때 무관한 카드를 붙이면 답변과 모순(적대적 케이스).
+_NEGATION = re.compile(r"없습니다|없어요|없네요|않습니다|않아요|찾지 못|확인되지 않|해당하지 않|존재하지 않")
+
+
 def pick_card(retrieved: list[tuple[DocChunk, float]], llm_text: str) -> DocChunk | None:
-    """카드로 보여줄 1건: AI가 실제 언급한 서비스 우선(카드=답변 일관성), 없으면 검색 1위.
-    LLM이 '노인 맞춤 돌봄 서비스'처럼 띄어 써도 잡히게 공백 무시 비교. PDF 청크(fields 없음)는 카드 불가."""
+    """카드로 보여줄 1건 (카드 = 답변의 시각화, 검색의 시각화가 아님).
+    1) AI가 실제 언급한 서비스명 매칭(공백 무시) 우선.
+    2) 매칭 실패 시: 답변이 부정('없습니다' 등)이면 카드 생략 — 존재하지 않는 정책을
+       물었을 때 검색 1위(무관 서비스)가 붙는 모순 방지. 부정이 아니면 검색 1위 폴백.
+    PDF 청크(fields 없음)는 카드 불가."""
     withf = [(c, s) for c, s in retrieved if c.fields]
     if not withf:
         return None
@@ -83,6 +90,8 @@ def pick_card(retrieved: list[tuple[DocChunk, float]], llm_text: str) -> DocChun
         base_n = re.sub(r"\s+", "", c.fields.get("서비스명", "").split("(")[0])
         if base_n and base_n in text_n:
             return c
+    if _NEGATION.search(llm_text or ""):
+        return None
     return withf[0][0]
 
 

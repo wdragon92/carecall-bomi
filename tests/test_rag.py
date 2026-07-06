@@ -98,7 +98,27 @@ def test_pick_card_spacing_variants():
 
     picked = pick_card(retrieved, "어르신께는 노인 맞춤 돌봄 서비스가 도움이 될 것 같아요.")
     assert picked is care  # 띄어쓰기 변형도 매칭
-    assert pick_card(retrieved, "서비스명 언급 없는 답변") is med  # 폴백은 검색 1위
+    assert pick_card(retrieved, "식사는 잘 챙겨 드시고 계신가요?") is med  # 부정 아님 → 폴백 유지
+
+
+def test_pick_card_adversarial_negation():
+    """적대적 케이스: 존재하지 않는 정책 질문 → LLM이 '없습니다'로 답하면
+    무관한 검색 1위 카드를 붙이지 않는다 (답변-카드 모순 방지)."""
+    from app.rag.answer import pick_card
+    from app.rag.schema import DocChunk
+
+    grant = DocChunk(text="", source="", fields={"서비스명": "장애인고용장려금"})
+    pension = DocChunk(text="", source="", fields={"서비스명": "기초연금"})
+    retrieved = [(grant, 0.9), (pension, 0.8)]
+
+    # '모든 국민 100만원' 류 → 부정 답변 → 카드 없음
+    neg = "정부에서 모든 국민에게 100만 원을 지원하는 정책은 현재 없습니다. 주민센터에 문의해 보세요."
+    assert pick_card(retrieved, neg) is None
+    assert pick_card(retrieved, "그런 제도는 확인되지 않아요.") is None
+
+    # 부정 답변이라도 서비스명을 실제로 언급했으면 그 카드는 유효
+    mixed = "그런 정책은 없습니다. 대신 기초연금은 검토해보실 만해요."
+    assert pick_card(retrieved, mixed) is pension
 
 
 def test_augment_query():
