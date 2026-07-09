@@ -25,6 +25,17 @@ def test_senior_drops_youth_and_worker():
     assert not senior_relevant("자활근로(기초, 차상위)", "근로능력 있는 수급자")
 
 
+def test_senior_drops_financial_products():
+    """C4: 금융상품(서민금융·저축·적금·기금)은 복지 급여가 아니므로 노인 표지 없으면 배제.
+    실 API 실측: '농어가목돈마련저축 저축장려금 지급'(금융위·서민금융)이 필터를 통과하던 결함."""
+    assert not senior_relevant("농어가목돈마련저축 저축장려금 지급", "만기 시 저축장려금 지급")
+    assert not senior_relevant("재산형성 적금 지원", "저소득 가입자")
+    assert not senior_relevant("서민금융 통합지원", "")
+    assert not senior_relevant("국민행복기금 채무조정", "연체 채무 조정")
+    # 금융어라도 노인 표지가 함께 있으면 senior 우선으로 유지(과잉 배제 금지)
+    assert senior_relevant("어르신 노후 저축 장려", "만 65세 이상 어르신")
+
+
 def test_senior_hard_excludes_sanjae_over_yoyang():
     # '요양급여'의 요양 표지에 걸려 살아남던 산재 제도 — 하드 배제가 이긴다
     assert not senior_relevant("요양급여(보조기)-산재보험급여", "산재근로자를 지원합니다")

@@ -17,10 +17,10 @@ class ClovaTTS:
     def __init__(self, settings: Settings) -> None:
         self.cid = settings.ncp_apigw_client_id.strip()
         self.csec = settings.ncp_apigw_client_secret.strip()
-        self.voice = (settings.clova_tts_voice or "vmikyung").strip()
-        self.speed = int(getattr(settings, "clova_tts_speed", 0))
+        self.voice = (settings.clova_tts_voice or "vgoeun").strip()
+        self.speed = int(getattr(settings, "clova_tts_speed", -2))
         # 의문문(?로 끝남) 끝음 올리기 — "잘 안 오세요?"가 평서문처럼 내려가는 문제 보정
-        self.q_pitch = int(getattr(settings, "clova_tts_question_pitch", 2))
+        self.q_pitch = int(getattr(settings, "clova_tts_question_pitch", 0))
         self._client = httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=10.0))
 
     async def synthesize(self, text: str) -> bytes:
@@ -49,3 +49,6 @@ class ClovaTTS:
         if resp.status_code != 200:
             raise ProviderError(f"TTS {resp.status_code}: {resp.text[:200]}")
         return resp.content
+
+    async def aclose(self) -> None:
+        await self._client.aclose()

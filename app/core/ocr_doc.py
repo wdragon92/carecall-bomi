@@ -44,7 +44,14 @@ _ORG = re.compile(
     r"([가-힣A-Za-z0-9()]+(?:공사|공단|구청|시청|군청|센터|은행|카드|보험|병원|의원|약국|우체국|복지과|복지관))"
 )
 _AMOUNT = re.compile(r"\d[\d,]*\s*원")
-_DATE = re.compile(r"(?:\d{4}\s*[.\-/년]\s*)?\d{1,2}\s*[.\-/월]\s*\d{1,2}\s*일?(?:\s*까지)?")
+# 날짜 오매칭 방지: 월 1~12·일 1~31로 제한하고, 애매한 'NN-NN/NN.NN'(전화·고객번호 조각)은
+# 4자리 연도(ISO형)나 한글 '월/일' 표기가 있을 때만 날짜로 인정한다.
+_MON = r"(?:1[0-2]|0?[1-9])"
+_DAY = r"(?:3[01]|[12]\d|0?[1-9])"
+_DATE = re.compile(
+    rf"\d{{4}}\s*[.\-/]\s*{_MON}\s*[.\-/]\s*{_DAY}(?:\s*까지)?"
+    rf"|(?:\d{{4}}\s*년\s*)?{_MON}\s*월(?:\s*{_DAY}\s*일)?(?:\s*까지)?"
+)
 
 
 def classify_by_rules(text: str) -> DocInfo:
@@ -69,14 +76,24 @@ def classify_by_rules(text: str) -> DocInfo:
         doc.보낸곳 = m.group(1)
 
     amount = _AMOUNT.search(t)
-    dates = _DATE.findall(t)
-    due = next((d.strip() for d in dates if "까지" in d), dates[-1].strip() if dates else "")
+    runs = _src_runs(t)
+    dates = [d.strip() for d in _DATE.findall(t)]
+    due = next((d for d in dates if "까지" in d), "")
+    if not due and dates:  # 기한 없으면 '연도·일'이 든 완성형 날짜 우선 — 막연한 마지막 매칭 채택 완화
+        strong = [d for d in dates if "일" in d or re.search(r"\d{4}", d)]
+        due = (strong or dates)[-1]
     until = "" if due.endswith("까지") else "까지"
+
+    def _t2(line: str) -> str:  # 조립 문구의 숫자가 원문에 없으면 버림(룰 폴백에도 원문 대조 가드)
+        return "" if _fabricated(line, runs) else line
+
     if doc.종류 == "고지서·청구서" and amount:
-        doc.해야할일 = [f"{due}{until} {amount.group(0)} 납부" if due else f"{amount.group(0)} 납부"]
+        base = f"{amount.group(0)} 납부"
+        doc.해야할일 = [(_t2(f"{due}{until} {base}") or base) if due else base]
     elif doc.종류 == "복지·관공서 안내문" and "신청" in t:
         where = "주민센터에서 " if "주민센터" in t else ("복지로에서 " if "복지로" in t else "")
-        doc.해야할일 = [f"{due}{until} {where}신청".strip() if due else f"{where}신청 방법 확인해 보기"]
+        default = f"{where}신청 방법 확인해 보기".strip()
+        doc.해야할일 = [(_t2(f"{due}{until} {where}신청".strip()) or default) if due else default]
     return doc
 
 
@@ -86,10 +103,13 @@ def _src_runs(src: str) -> list[str]:
 
 
 def _fabricated(line: str, src_runs: list[str]) -> bool:
-    """3자리 이상 숫자 토큰이 원문 숫자열 어디에도 없으면 지어낸 것으로 판정."""
+    """3자리 이상 숫자 토큰이 원문 숫자열과 '통째로' 일치하지 않으면 지어낸 것으로 판정.
+    부분열 매칭(digits in run)은 조작된 짧은 숫자가 원문의 긴 숫자(고객번호·계좌)에
+    묻혀 통과("456"⊂"4567")하므로, 토큰 단위 정확 일치(경계 기반)로 조인다."""
+    runs = set(src_runs)
     for tok in re.findall(r"\d[\d,.\s]*\d|\d", line):
         digits = re.sub(r"\D", "", tok)
-        if len(digits) >= 3 and not any(digits in r for r in src_runs):
+        if len(digits) >= 3 and digits not in runs:
             return True
     return False
 

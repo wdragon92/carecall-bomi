@@ -11,6 +11,13 @@
     html, body { height: 100%; margin: 0; }
     body { font-family: "Malgun Gothic", system-ui, sans-serif; font-size: 18px; background: #f6f7f9; color: #1f2937; }
     #app { display: flex; flex-direction: column; height: 100vh; height: 100dvh; } /* dvh 미지원 구형 브라우저 vh 폴백 */
+    /* Tailwind CDN 실패 시 핵심 유틸 폴백 — 없으면 리포트 모달·파일입력·긴급배너가 그대로 노출된다.
+       (!important지만 CDN 정상 시엔 아래 md:* 규칙이 뒤에서 다시 이겨 데스크톱 패널/탭 레이아웃 유지) */
+    .hidden { display: none !important; }
+    @media (min-width: 768px) {
+      .md\:hidden { display: none !important; }
+      .md\:flex { display: flex !important; }
+    }
     .bubble { max-width: 85%; padding: 14px 16px; border-radius: 18px; line-height: 1.6; font-size: 19px; white-space: pre-wrap; word-break: break-word; }
     .bubble-ai { background: #fff; border: 1px solid #e5e7eb; border-bottom-left-radius: 4px; }
     .bubble-user { background: #2563eb; color: #fff; border-bottom-right-radius: 4px; }

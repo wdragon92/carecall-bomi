@@ -45,7 +45,7 @@ _INFO_REQ = re.compile(r"알려|궁금|자세히|말해|들어보")
 _ANAPHORA = re.compile(r"그거|그건|그게|아까|저거")  # 앞선 제안·안내를 가리키는 대용어
 # 세션 밖 과거 참조("저번에 니가 알려준다던…") — 안내 이력이 없으면 접지를 태우지 않는다
 # (자료가 실리면 모델이 '말씀드렸던…확인해보니…' 가짜 연속성으로 안내 모드에 빠지는 실측)
-_PAST_REF = re.compile(r"저번에|지난번|접때|요전에")
+_PAST_REF = re.compile(r"저번에|지난번|접때|요전에|예전에|일전에|언젠가|며칠\s*전에|얼마\s*전에|옛날에")
 # 이미 송금·이체가 일어난 정황(과거형) — 결정적 행동 카드 트리거
 _FRAUD_SENT = re.compile(r"보냈|보내 ?버렸|송금했|송금해 ?버렸|이체했|입금했|부쳤")
 
@@ -107,6 +107,13 @@ _FAREWELL = re.compile(
     r"|기도할게요|기원하겠|행복한 하루|오늘 하루도.*보내"
 )
 
+# T2 금액 하드가드용 — 발화에 샌 '원/억/만' 화폐 표현(고지서·자료 수치 포함)을 잡는다.
+# 화폐 단위(원 또는 억)로 끝나야만 매칭 → 전화번호(119·1332 등)·연도는 건드리지 않는다.
+_SPOKEN_AMOUNT = re.compile(
+    r"(?:약\s*)?\d[\d,]*(?:\s*[억만천백]\s*[\d,]*)*\s*원(?:\s*수준|\s*정도)?"  # …원 (억·만·천·백 조합 포함)
+    r"|(?:약\s*)?\d[\d,]*\s*억(?:\s*수준|\s*정도)?"                              # 숫자+억 (원 없이 끝나는 표현)
+)
+
 
 async def _speak(
     sess, providers, messages, max_tokens: int = 240, single: bool = False,
@@ -165,12 +172,13 @@ async def _speak(
                 )
         except Exception as exc:  # noqa: BLE001
             log.warning("card pick failed (%s) — 답변만 전송", exc)
-    if card_ctx is not None:
-        # T2 하드 가드: 접지 턴 발화의 금액은 카드로만 — 자료 블록의 수치를 LLM이
-        # 발화로 옮기는 누출("월 최대 약 34만 원…") 실측. 결정적으로 걷어낸다.
-        full = re.sub(r"(?:약\s*)?\d{1,3}(?:,\d{3})*\s*만\s*원(?:\s*수준|\s*정도)?",
-                      "화면 카드에 적어드린 금액" if chunk is not None else "말씀하신 금액",
-                      full)
+    # T2 하드 가드: 발화 텍스트의 금액은 카드로만 — 자료 블록·고지서의 수치를 LLM이
+    # 발화로 옮기는 누출("월 최대 약 34만 원…") 실측. 접지·비접지·OCR 설명 턴을 가리지
+    # 않고 결정적으로 걷어낸다(카드가 붙은 접지 턴만 '화면 카드'로, 그 외엔 '말씀하신 금액').
+    full = _SPOKEN_AMOUNT.sub(
+        "화면 카드에 적어드린 금액" if chunk is not None else "말씀하신 금액",
+        full,
+    )
     segs = [full.strip()] if single else _segments(full)
     if not segs:
         segs = ["네, 듣고 있어요."]
@@ -377,7 +385,8 @@ async def _rag_lookup(sess, providers, settings, user_text: str) -> dict | None:
                         min_vec=settings.rag_item_threshold(emode),
                         region=settings.rag_default_region)
     ok = passes_gate(r, settings, emode)
-    log.info("rag lookup top=%.3f bm25=%.1f gate=%s q=%s", r.top_score, r.bm25_top, ok, q[:40])
+    # PII 최소화: 질의 원문(이름·금액 등)은 남기지 않고 길이만 기록
+    log.info("rag lookup top=%.3f bm25=%.1f gate=%s qlen=%d", r.top_score, r.bm25_top, ok, len(q))
     if not ok:
         return None
     # 게이트 통과는 '후보 발견'이지 아직 '근거 확정'이 아니다 — 확정(found/no_match)은 답변
@@ -467,7 +476,9 @@ async def _handle_screening(sess, providers, settings, fresh: bool) -> bool:
         await welfare.push_welfare(sess)
 
     await sess.send({"type": "ai_turn", "bubbles": bubbles})
-    log.info("screening verdict=%s slots=%s", verdict, {k: v for k, v in sess.slots.items()})
+    # PII 최소화: 슬롯 값(나이·소득)은 남기지 않고 채워진 키 이름만 기록
+    log.info("screening verdict=%s filled=%s", verdict,
+             sorted(k for k, v in sess.slots.items() if v is not None and not k.startswith("_")))
     return True
 
 
@@ -526,12 +537,25 @@ async def handle_turn(sess, providers, settings) -> None:
                 _spawn_extract(sess, providers)
                 return
 
+    # 과거 참조("저번에 알려준다던 그거")인데 이 대화에 안내 이력이 없으면 접지 금지 —
+    # 자료가 실리면 가짜 연속성 날조의 연료가 된다(정직한 확인 질문 경로로). 아래 수락
+    # 판정에서도 함께 억제해, 과거참조+수락형이 접지 가드를 우회하지 못하게 한다.
+    past_ref_no_history = bool(
+        _PAST_REF.search(user_text) and not sess.welfare_cards and sess.last_rag is None
+    )
     # 제안 수락 흐름: 직전 턴에 보미가 복지를 제안("알려드릴까요?")했고 어르신이 긍정 호응
     # → 그 서비스명으로 근거(RAG) 검색해 카드까지 이어지는 안내 턴으로 승격.
     # 질의 체인: 제안 서비스명/제안 원문 → (명시적 정보 요청이면) 패널 매칭 후보.
     # 제안 원문이 게이트에 못 미쳐도 어르신 발화에서 매칭된 후보로 한 번 더 시도한다.
+    # 단, 수락은 '수락할 대상(직전 제안 발화)'이 실재할 때만 인정 — 직전 제안이 없으면
+    # "기초연금 알려줘" 같은 명시 질의를 수락 기계가 패널 후보로 오검색해 가로채므로,
+    # 그때는 일반 RAG 경로로 넘겨 발화 그대로 검색되게 한다.
     card_ctx = None
-    accepted = _accepts_offer(user_text)
+    accepted = (
+        _accepts_offer(user_text)
+        and _last_offer_text(sess) is not None
+        and not past_ref_no_history
+    )
     if accepted:
         named = _offered_service(sess)
         queries = []
@@ -554,11 +578,6 @@ async def handle_turn(sess, providers, settings) -> None:
                 break
     # 수락형 발화("응 자세히 알려줘")는 일반 검색으로 흘리지 않는다 — 기능어 위주라
     # 어휘 우연으로 게이트를 뚫고 무관 자료가 접지되는 사고 실측(응급안전안심 등).
-    # 과거 참조("저번에 알려준다던 그거")인데 이 대화에 안내 이력이 없으면 역시 접지 금지
-    # — 자료가 실리면 가짜 연속성 날조의 연료가 된다. 정직한 확인 질문 경로로.
-    past_ref_no_history = (
-        _PAST_REF.search(user_text) and not sess.welfare_cards and sess.last_rag is None
-    )
     if card_ctx is None and not bc and not accepted and not past_ref_no_history:
         card_ctx = await _rag_lookup(sess, providers, settings, user_text)
 
@@ -589,15 +608,21 @@ async def handle_image(sess, providers, image_bytes: bytes, fmt: str, name: str,
     await sess.send({"type": "ocr_status", "upload_id": upload_id, "status": "processing"})
     try:
         ocr_text = await providers.ocr.extract_text(image_bytes, fmt, name)
-    except Exception as exc:  # noqa: BLE001 — 어떤 실패든 mock으로 (OCR 상태가 '처리 중'에서 멈추지 않게)
-        log.warning("ocr real failed (%s) → mock", exc)
-        try:
-            ocr_text = await providers.mocr.extract_text(image_bytes, fmt, name)
-        except Exception as exc2:  # noqa: BLE001
-            log.error("ocr mock failed: %s", exc2)
-            await sess.send({"type": "ocr_status", "upload_id": upload_id, "status": "error"})
-            await sess.send({"type": "error", "code": "ocr", "message": "사진에서 글자를 읽지 못했어요. 다시 찍어 주시겠어요?"})
-            return
+    except Exception as exc:  # noqa: BLE001 — 실 OCR 실패. OCR 상태가 '처리 중'에서 멈추지 않게 폴백
+        log.warning("ocr real failed (%s)", exc)
+        if providers.modes.get("ocr") == "mock":
+            # 데모(MOCK_MODE) 경로 — 목 OCR이 1차 provider라 폴백도 목으로 유지(기존 동작)
+            try:
+                ocr_text = await providers.mocr.extract_text(image_bytes, fmt, name)
+            except Exception as exc2:  # noqa: BLE001
+                log.error("ocr mock failed: %s", exc2)
+                await sess.send({"type": "ocr_status", "upload_id": upload_id, "status": "error"})
+                await sess.send({"type": "error", "code": "ocr", "message": "사진에서 글자를 읽지 못했어요. 다시 찍어 주시겠어요?"})
+                return
+        else:
+            # 실 OCR 실패: 파일명 기반 가짜 고지서를 실제처럼 안내하지 않는다. 빈 인식으로
+            # 흘려보내 아래 '읽지 못함' 재촬영 안내를 재사용하고, ocr_texts도 오염시키지 않는다.
+            ocr_text = ""
     finally:
         image_bytes = b""  # 디스크 저장 안 함, 참조도 폐기
 

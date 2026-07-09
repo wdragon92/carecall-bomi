@@ -33,7 +33,8 @@ async def _main() -> int:
 
     from app.config import get_settings
     from app.rag import cards
-    from app.rag.index import build_index, load_index, resolve_data_dir, save_index
+    from app.rag.index import (build_index, guard_min_count, load_index,
+                                resolve_data_dir, save_index)
 
     s = get_settings()
     data_dir = Path(args.data_dir).resolve() if args.data_dir else resolve_data_dir(s)
@@ -53,8 +54,15 @@ async def _main() -> int:
         print("[build_index] no chunks to index - nothing to do")
         return 1
 
+    existing = load_index(data_dir)
+    # C1 하한 가드: 임베딩(비용 큼)·저장 이전에 카드 급감을 먼저 차단. --force는 의도적 축소로 보고 우회.
+    reason = None if args.force else guard_min_count(len(chunks), existing)
+    if reason:
+        print(f"[build_index] ABORT (min-count guard): {reason}")
+        return 2
+
     embedder, mode = _pick_embedder(s)
-    prev = None if args.force else load_index(data_dir)
+    prev = None if args.force else existing
     # 실 임베딩은 QPM 제한이 있어 호출 간격을 넉넉히 (429 백오프는 클라이언트가 추가 수행)
     loaded, st = await build_index(chunks, embedder.embed, prev, mode,
                                    sleep_s=0.4 if mode == "real" else 0.0)

@@ -38,3 +38,6 @@ class ClovaSTT:
         except ValueError as exc:
             raise ProviderError(f"CSR non-JSON response: {resp.text[:200]!r}") from exc
         return ((data.get("text") if isinstance(data, dict) else "") or "").strip()
+
+    async def aclose(self) -> None:
+        await self._client.aclose()

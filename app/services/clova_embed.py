@@ -53,3 +53,6 @@ class ClovaEmbed:
 
     async def embed(self, texts: list[str]) -> list[list[float]]:
         return [await self._embed_one(t) for t in texts]
+
+    async def aclose(self) -> None:
+        await self._client.aclose()

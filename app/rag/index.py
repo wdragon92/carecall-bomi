@@ -123,6 +123,22 @@ async def build_index(
     return loaded, stats
 
 
+def guard_min_count(new_count: int, prev: "LoadedIndex | None", floor_ratio: float = 0.5) -> str | None:
+    """자동 재빌드 하한 가드 (C1): 새 카드 수가 이전 인덱스 대비 급감했으면 거부 사유(str)를,
+    정상이면 None을 반환. 첫 빌드(prev=None)·이전 0건은 비교 대상이 없어 통과한다.
+    호출측(build_index.py)이 사유가 있으면 저장을 건너뛰고 비0 종료 → 포털 장애·에러바디로
+    카드가 텅 빈 인덱스가 기존 정상 인덱스를 덮어쓰는 사고를 막는다(의도적 축소는 --force)."""
+    if prev is None:
+        return None
+    prev_count = int(prev.meta.get("count", 0) or 0)
+    if prev_count <= 0:
+        return None
+    if new_count < prev_count * floor_ratio:
+        return (f"신규 카드 {new_count}건 < 이전 {prev_count}건의 {floor_ratio:.0%} — "
+                f"인덱스 덮어쓰기 거부(급감 감지). 의도한 축소면 --force 로 재실행하세요.")
+    return None
+
+
 def _atomic_write(path: Path, write_fn) -> None:
     tmp = path.with_suffix(path.suffix + ".tmp")
     write_fn(tmp)
@@ -145,6 +161,8 @@ def save_index(loaded: LoadedIndex, data_dir: Path, stats: dict | None = None) -
         data_dir / "hash.json",
         lambda p: p.write_text(json.dumps(loaded.hashes, ensure_ascii=False, indent=1), encoding="utf-8"),
     )
+    # C13: welfare.faiss는 외부 점검/호환용 산출물일 뿐, 런타임은 load_index가 pkl의 embeddings로
+    # VectorIndex를 재구성해 검색한다(load_index는 .faiss를 읽지 않음). 없어도 앱은 동일 동작.
     if HAS_FAISS and len(loaded.embeddings):
         vindex = VectorIndex(loaded.embeddings)
         _atomic_write(data_dir / "welfare.faiss", lambda p: faiss.write_index(vindex._faiss, str(p)))

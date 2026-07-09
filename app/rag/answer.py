@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
+from datetime import date
 
 from app.rag.cards import card_url
 from app.rag.schema import DocChunk
@@ -41,8 +42,21 @@ async def refresh_detail(settings, chunk: DocChunk) -> tuple[dict, bool]:
         fresh = None
     if fresh:
         fields.update(fresh)
+        # 실시간 조회 성공 → 표시 기준일을 오늘로 갱신 (수집본 캐시 날짜가 아니라 방금 확인한 값).
+        # compose_card가 이 사설 키를 우선 사용한다. 실패·픽스처 경로에는 추가하지 않는다.
+        fields["_collected_at"] = date.today().isoformat()
         return fields, True
     return fields, False
+
+
+def _prefix_dup(a: str, b: str) -> bool:
+    """두 필드가 사실상 같은 문구인지 — 공백 무시 후 완전 일치이거나 한쪽이 다른 쪽의 접두면 True.
+    (대상/지원이 같은 요약을 서로 다른 길이로 자른 접두 중복 카드를 막는다.)"""
+    na = re.sub(r"\s+", "", a or "")
+    nb = re.sub(r"\s+", "", b or "")
+    if not na or not nb:
+        return False
+    return na.startswith(nb) or nb.startswith(na)
 
 
 def compose_card(chunk: DocChunk, fields: dict, live: bool) -> tuple[str, str]:
@@ -52,17 +66,23 @@ def compose_card(chunk: DocChunk, fields: dict, live: bool) -> tuple[str, str]:
     lines = [f"📌 {name}"]
     if fields.get("지역"):
         lines.append(f"· 지역: {fields['지역']}")
-    if fields.get("지원대상"):
-        lines.append(f"· 대상: {fields['지원대상']}")
-    if fields.get("지원내용") and fields["지원내용"] != fields.get("지원대상"):
-        lines.append(f"· 지원: {fields['지원내용']}")  # 대상과 동일 문구 복제 방지(구 인덱스 호환)
+    target = fields.get("지원대상") or ""
+    benefit = fields.get("지원내용") or ""
+    if target:
+        lines.append(f"· 대상: {target}")
+    # 대상과 동일 문구 복제 방지 — 완전 일치뿐 아니라 한쪽이 다른 쪽의 접두인 경우도 걸러낸다.
+    # (service_to_card가 대상 180자 / 지원 220자로 잘라 둘 다 summary 폴백이면 접두 중복 발생)
+    if benefit and not _prefix_dup(benefit, target):
+        lines.append(f"· 지원: {benefit}")
     if fields.get("신청방법"):
         lines.append(f"· 신청: {fields['신청방법']}")
     if fields.get("구비서류"):
         lines.append(f"· 서류: {fields['구비서류']}")
     lines.append(f"· 문의: {fields.get('문의처') or '보건복지상담센터 129'}")
-    if chunk.collected_at:
-        lines.append(f"· 정보 기준일: {chunk.collected_at}" + (" · 방금 확인" if live else ""))
+    # 표시 기준일: live 갱신본(refresh_detail가 오늘로 세팅) 우선, 없으면 수집본 캐시 날짜.
+    base_date = fields.get("_collected_at") or chunk.collected_at
+    if base_date:
+        lines.append(f"· 정보 기준일: {base_date}" + (" · 방금 확인" if live else ""))
     lines.append(f"· 복지로: {card_url(chunk)}")  # 링크는 폴백 체인으로 항상 부착
     tts = f"{name}의 지원 내용과 신청 방법은 화면에 정보 카드로 정리해 드렸어요."
     return "\n".join(lines), tts

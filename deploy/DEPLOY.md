@@ -75,8 +75,9 @@ ssh -i ~/.ssh/carecall_ed25519 root@$IP \
   "cd /opt/carecall && git pull && ./.venv/bin/pip install -r requirements.txt -q && systemctl restart carecall"
 
 # RAG 인덱스만 갱신 (재시작 불필요 — 무중단 스왑; 주 1회 cron 자동 + 발표 전날 수동 1회)
+# ⚠️ 반드시 --source all — fixtures(12청크)로 빌드하면 실 코퍼스 347청크가 날아가 무릎인공관절·지역카드가 사라진다
 ssh -i ~/.ssh/carecall_ed25519 root@$IP \
-  "cd /opt/carecall && ./.venv/bin/python build_index.py --source fixtures && curl -s -X POST http://127.0.0.1:8080/api/rag/reload"
+  "cd /opt/carecall && ./.venv/bin/python build_index.py --source all && curl -s -X POST http://127.0.0.1:8080/api/rag/reload"
 ```
 
 ## 철수 (시연 후) — TEARDOWN.md 참고

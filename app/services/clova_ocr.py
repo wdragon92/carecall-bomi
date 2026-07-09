@@ -70,3 +70,6 @@ class ClovaOCR:
             return _reconstruct(resp.json())
         except ValueError as exc:  # 200인데 본문이 JSON이 아님
             raise ProviderError(f"CLOVA OCR non-JSON response: {resp.text[:200]!r}") from exc
+
+    async def aclose(self) -> None:
+        await self._client.aclose()

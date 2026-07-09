@@ -34,15 +34,16 @@ def _parse_findings(raw_list) -> list[Finding]:
     return out
 
 
-def _merge(safety_findings: list[Finding], llm_findings: list[Finding]) -> list[Finding]:
-    # 안전망(위험신호) 먼저, 그 뒤 LLM. id 기준 중복 제거.
+def _merge(*groups: list[Finding]) -> list[Finding]:
+    # 앞선 그룹 우선(안전망 → LLM → 기존 findings). id 기준 중복 제거로 무한 누적 방지.
     merged: list[Finding] = []
     seen: set[str] = set()
-    for f in safety_findings + llm_findings:
-        if f.id in seen:
-            continue
-        seen.add(f.id)
-        merged.append(f)
+    for group in groups:
+        for f in group:
+            if f.id in seen:
+                continue
+            seen.add(f.id)
+            merged.append(f)
     return merged
 
 
@@ -117,8 +118,13 @@ async def _run_once(sess, providers) -> None:
             data = {}
 
     llm_findings = _parse_findings(data.get("findings") if isinstance(data, dict) else None)
-    # LLM 성공 → 안전망+LLM 으로 갱신 / 실패 → 기존 findings 보존(안전망만 반영, 누적 유지)
-    findings = _merge(safety_findings, llm_findings) if llm_ok else _merge(safety_findings, sess.findings)
+    # LLM 성공/실패 모두 기존 findings를 누적 보존한다 — 성공 턴이 이전 관찰(안전망 백스톱이
+    # 없는 인지·복지_니즈 등)을 덮어써 지우던 문제(S6) 방지. 우선순위 안전망 > 이번 LLM > 기존,
+    # id 기준 dedup 으로 무한 누적은 막는다. 실패 경로(안전망+기존)와 대칭.
+    findings = (
+        _merge(safety_findings, llm_findings, sess.findings) if llm_ok
+        else _merge(safety_findings, sess.findings)
+    )
     sess.findings = findings
     await sess.send({"type": "findings_update", "findings": [_dump(f) for f in findings]})
 
@@ -137,13 +143,17 @@ async def _run_once(sess, providers) -> None:
         else:
             llm_flags.add("psych")
     level2, message2 = safety.alert(kinds, llm_flags)
-    if level2 and level2 != level:
+    # 등급이 같아도 문구가 다르면 전송한다 — medical_soon warning과 사기 warning이 공존할 때
+    # 이전 `level2 != level`이 동급 사기 112/1332 경보를 가리던 문제(S11) 방지.
+    # 동일 경보의 재전송 억제는 _send_alert 가 계속 담당.
+    if level2 and (level2, message2) != (level, message):
         await _send_alert(sess, level2, message2)
 
     # 복지 매칭 — 패널 전송은 push_welfare 단일 지점(RAG 카드와 병합)
     signals = data.get("welfare_signals") if isinstance(data, dict) else None
     matched = welfare.match(signals or [], transcript)
-    if matched:
-        sess.welfare_matched = [m["id"] for m in matched]
+    # 현재 턴 기준으로 갱신 — 빈 매칭 턴에 갱신을 건너뛰어 과거 항목이 영구 잔존하던 문제 방지
+    # (누적 transcript가 잘려 키워드가 사라진 턴 등). 패널 stale 완화.
+    sess.welfare_matched = [m["id"] for m in matched]
     if matched or sess.welfare_cards:
         await welfare.push_welfare(sess)

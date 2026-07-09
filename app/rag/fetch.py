@@ -33,9 +33,31 @@ def _clean(s: str, cap: int = 0) -> str:
     return out[:cap].rstrip() if cap and len(out) > cap else out
 
 
+# data.go.kr은 인증 실패·트래픽 초과·서비스 오류를 HTTP 200 + 에러 XML로 돌려준다(소프트 200).
+# 성공 응답은 resultCode=0(SUCCESS). 에러바디를 '정상 0건'으로 흡수하면 텅 빈 인덱스가 만들어지므로
+# 파싱 진입점에서 감지해 예외로 승격한다(호출측이 빌드를 중단 → 기존 정상 인덱스 보존).
+_OK_CODES = {"", "0", "00"}
+
+
+def _raise_for_error(root: ET.Element) -> None:
+    """공공데이터포털 에러바디 감지 — 에러면 RuntimeError, 정상이면 통과.
+    ⚠️ 예외 메시지에 serviceKey가 담기지 않도록 코드/사유만 싣는다."""
+    tag = root.tag.rsplit("}", 1)[-1]  # 네임스페이스 접두 제거
+    if tag == "OpenAPI_ServiceResponse" or root.find(".//cmmMsgHeader") is not None:
+        msg = (_text(root.find(".//returnAuthMsg")) or _text(root.find(".//errMsg"))
+               or _text(root.find(".//returnReasonCode")) or "OpenAPI_ServiceResponse")
+        raise RuntimeError(f"data.go.kr 오류 응답: {msg}")
+    for path in ("resultCode", ".//header/resultCode", ".//cmmMsgHeader/returnReasonCode"):
+        el = root.find(path)
+        if el is not None and _text(el) not in _OK_CODES:
+            reason = _text(root.find("resultMessage")) or _text(root.find(".//resultMsg"))
+            raise RuntimeError(f"data.go.kr resultCode={_text(el)} {reason}".strip())
+
+
 def _rows_to_dicts(xml_text: str) -> tuple[list[dict], int]:
     """wantedList/servList → [{tag: text}], totalCount."""
     root = ET.fromstring(xml_text)
+    _raise_for_error(root)  # 소프트 200 에러바디를 정상 0건으로 흡수하지 않는다
     total = int(_text(root.find("totalCount")) or 0)
     rows = []
     for item in root.findall("servList"):
@@ -54,6 +76,7 @@ def parse_items_local(xml_text: str) -> tuple[list[dict], int]:
 def _parse_detail(xml_text: str) -> dict:
     """wantedDtl → 평면 dict (+ 신청방법/문의처 리스트 요약)."""
     root = ET.fromstring(xml_text)
+    _raise_for_error(root)  # 에러바디 상세는 카드에 병합하지 않는다(호출측이 폴백 처리)
     out: dict = {}
     for child in root:
         if len(child) == 0:
@@ -129,17 +152,22 @@ def _keep_age(row: dict, life_key: str) -> bool:
     - 생애주기에 '노년'이 없으면 제외.
     - '노년'이 있어도 다중 태그 나열(청년,중장년,노년…)일 수 있으므로
       서비스명·대상 본문으로 어르신 적합성을 한 번 더 판정.
-    - 생애주기 미표기(전 연령성)는 본문 판정만으로 결정."""
+    - 생애주기 미표기(전 연령성)는 본문 판정만으로 결정.
+    ⚠️ C4: 대상특성·관심주제 배열(trgterIndvdl·intrsThema)은 servDgst(본문)와 성격이 달라
+    load(cards.service_to_card '관련어' → chunk_senior_relevant tags)와 동일하게 tags 인자로 넘긴다.
+    (본문 target은 넓은 _YOUTH, 카테고리 tags는 좁은 _TAG_EXCLUDE로 판정 — 수집=로드 통일)."""
     from app.rag.senior import senior_relevant
 
     life = row.get(life_key, "")
     if life and AGE_TOKEN not in life:
         return False
-    target = " ".join(filter(None, [
-        row.get("servDgst", ""),
+    target = row.get("servDgst", "")
+    tags = " ".join(filter(None, [
+        life,
         row.get("trgterIndvdlArray") or row.get("trgterIndvdlNmArray", ""),
+        row.get("intrsThemaArray") or row.get("intrsThemaNmArray", ""),
     ]))
-    return senior_relevant(row.get("servNm", ""), target)
+    return senior_relevant(row.get("servNm", ""), target, tags)
 
 
 async def api_cards(settings, age_filter: bool = True, progress=None) -> list[DocChunk]:
@@ -197,6 +225,12 @@ async def api_cards(settings, age_filter: bool = True, progress=None) -> list[Do
                     progress(f"local detail: {i + 1}/{len(keep)}")
                 await asyncio.sleep(0.25)  # 포털 과속(429) 예방
 
+    # C1: 키를 들고도 카드 0건이면 에러 응답을 정상 0건으로 흡수한 정황 — 예외로 승격(빈 인덱스 방지).
+    # (실 API는 461+ 목록을 반환하므로 필터 후에도 0건은 사실상 장애·인증오류 신호)
+    if (ck or lk) and not cards:
+        raise RuntimeError(
+            "공공데이터포털 카드 0건(키 보유). 에러 응답을 정상 0건으로 흡수하지 않도록 빌드를 중단합니다."
+        )
     if progress:
         progress(f"api cards total: {len(cards)}")
     return cards

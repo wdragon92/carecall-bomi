@@ -27,17 +27,28 @@ async function init() {
   }
 }
 
+// WS 재접속 백오프 상수 — handshake만 성공하고 서버가 곧장 close해도 무한 재접속에 빠지지 않게.
+const RECONNECT_MAX = 6;       // 최대 재시도 횟수(초과 시 새로고침 안내)
+const RECONNECT_BASE = 1500;   // 지수 백오프 기준(ms)
+const RECONNECT_CAP = 15000;   // 백오프 상한(ms)
 function connectWS() {
   const proto = location.protocol === "https:" ? "wss" : "ws";
   const ws = new WebSocket(`${proto}://${location.host}/ws/${state.sessionId}`);
   state.ws = ws;
-  ws.onopen = () => { state.reconnect = 0; setBadge("보미가 곁에 있어요"); }; // session_ready가 곧 상세 배지로 갱신
-  ws.onmessage = (ev) => { try { handleWS(JSON.parse(ev.data)); } catch (e) {} };
+  // ⚠️ onopen(handshake 성공)만으로 카운터를 리셋하면, 서버가 handshake 직후 close할 때
+  //    카운터가 계속 0으로 되돌아가 무한 재접속에 빠진다. 실제 메시지를 한 번이라도 받아
+  //    '정상 통신'이 확인된 뒤에만(onmessage) 리셋한다.
+  ws.onopen = () => { setBadge("보미가 곁에 있어요"); }; // session_ready가 곧 상세 배지로 갱신
+  ws.onmessage = (ev) => {
+    state.reconnect = 0; // 정상 통신 확인 — 이후 끊기면 백오프를 처음부터 다시
+    try { handleWS(JSON.parse(ev.data)); } catch (e) {}
+  };
   ws.onclose = () => {
-    if (state.reconnect < 3) {
+    if (state.reconnect < RECONNECT_MAX) {
+      const delay = Math.min(RECONNECT_CAP, Math.round(RECONNECT_BASE * Math.pow(1.5, state.reconnect)));
       state.reconnect++;
       setBadge("연결이 잠시 끊겼어요. 다시 연결 중…");
-      setTimeout(connectWS, 1500);
+      setTimeout(connectWS, delay);
     } else {
       setBadge("연결이 불안정해요. 새로고침 해주세요.");
       toast("연결이 끊겼어요. 화면을 아래로 당겨 새로고침 해주세요.");
@@ -397,7 +408,7 @@ function stopLivePreview() {
   _recog = null;
 }
 async function toggleRec() {
-  if (state.recPending) return; // 권한 프롬프트 대기 중 중복 클릭 무시
+  if (state.recPending || state.recStopping) return; // 권한 프롬프트/정지 꼬리 대기 중 중복 클릭 무시
   if (state.recording) await stopRec();
   else await startRec();
 }
@@ -452,8 +463,9 @@ async function startRec() {
   _recTimer = setTimeout(() => { if (state.recording) stopRec(); }, 30000); // 최대 30초(CSR 60초 제한 대비)
 }
 async function stopRec() {
-  if (!state.recording) return;
+  if (!state.recording || state.recStopping) return;
   state.recording = false;
+  state.recStopping = true; // 220ms 꼬리 대기 동안 새 녹음 시작을 막아 전역 오디오 그래프를 보호
   clearTimeout(_recTimer);
   $("#mic-hint").classList.add("hidden");
   const btn = $("#btn-mic");
@@ -470,6 +482,7 @@ async function stopRec() {
   const sr = _ctx.sampleRate;
   const flat = flatten(_chunks);
   try { await _ctx.close(); } catch (e) {}
+  state.recStopping = false; // 오디오 그래프 정리 완료 — 이제 새 녹음을 시작해도 안전(이후 fetch까지 동기 실행)
   // 실시간 미리보기 말풍선이 있으면 그대로 이어받아 확정 단계 표시
   const note = _liveRow || appendUserBubble("🎤 음성 인식 중…");
   _liveRow = null;
@@ -651,11 +664,13 @@ async function revealTurn(bubbles) {
   const blobs = useVoice ? bubbles.map((b) => fetchTTS(b.id)) : [];
   for (let i = 0; i < bubbles.length; i++) {
     if (myTurn !== _turn) return; // 새 턴/입력으로 중단
+    const b = bubbles[i] || {};
+    const btext = typeof b.text === "string" ? b.text : ""; // text 없는 구조화 카드 방어(예외로 턴 무음 중단 방지)
     showTyping();
-    await _sleep(Math.min(900, 280 + bubbles[i].text.length * 11)); // '입력 중' 짧은 뜸
+    await _sleep(Math.min(900, 280 + btext.length * 11)); // '입력 중' 짧은 뜸
     if (myTurn !== _turn) { hideTyping(); return; }
     hideTyping();
-    appendAiBubble(bubbles[i].text, bubbles[i].kind, bubbles[i].card);
+    appendAiBubble(btext, b.kind, b.card);
     if (useVoice && state.voiceOn && !state.recording) {
       const blob = await blobs[i];
       if (myTurn !== _turn) return;
@@ -665,10 +680,10 @@ async function revealTurn(bubbles) {
       if (myTurn !== _turn) return;
       if (!played) {
         if (blob) state._retryBlob = blob;
-        await _sleep(_readingDelay(bubbles[i].text));
+        await _sleep(_readingDelay(btext));
       }
     } else {
-      await _sleep(_readingDelay(bubbles[i].text));
+      await _sleep(_readingDelay(btext));
     }
   }
 }
@@ -737,18 +752,22 @@ function wireUI() {
   inp.addEventListener("focus", () => setTimeout(scrollDown, 150));
   if (window.visualViewport) window.visualViewport.addEventListener("resize", () => scrollDown());
 
-  // 모바일 자동재생 언락: 첫 사용자 제스처에서 무음 재생 + 차단됐던 인사 TTS 재시도
+  // 모바일 자동재생 언락: 사용자 제스처마다 확인. {once:true}면 인사 도착(=_retryBlob 설정) 전에
+  // 화면을 한 번 탭하는 순간 리스너가 사라져 이후 인사 TTS가 영구 무음 → once 제거하고 계속 바인딩한다.
+  let _audioUnlocked = false;
   document.addEventListener("pointerdown", () => {
-    try {
-      const a = new Audio("data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YQAAAAA=");
-      a.play().catch(() => {});
-    } catch (e) {}
+    if (!_audioUnlocked) {
+      try {
+        const a = new Audio("data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YQAAAAA=");
+        a.play().then(() => { _audioUnlocked = true; }).catch(() => {});
+      } catch (e) {}
+    }
     if (state._retryBlob && state.voiceOn && !state.recording) {
       const b = state._retryBlob;
       state._retryBlob = null;
       playBlob(b); // 첫 제스처가 전송/마이크면 해당 핸들러의 stopAudio가 곧바로 정리
     }
-  }, { once: true });
+  });
 }
 function toggleVoice() {
   state.voiceOn = !state.voiceOn;

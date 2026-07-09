@@ -1,6 +1,7 @@
 """안전망 매트릭스 (SF·EX 계열) — 결정적 규칙 스캔·경보 분기·추출 파이프라인.
 스캔은 코드가 반드시 잡아야 하는 안전망이라 실측 동작을 그대로 고정한다.
-부정 윈도(7자) 한계로 생기는 '안전측 오탐'은 의도된 현행으로 주석과 함께 고정."""
+부정 판정은 '구절을 직접 부정하는 형태'(지/진 않·못, 앞의 안/못, 명사화 없/안)만
+본다 — 무관한 뒷절의 '없'이 참-양성을 억누르지 않도록 정밀화된 동작을 고정."""
 import asyncio
 from types import SimpleNamespace
 
@@ -27,8 +28,9 @@ def test_consciousness_and_bleeding_are_emergency():
 
 # ---- SF-02: 같은 규칙의 복수 구문 매칭은 1건으로 dedupe ----
 def test_same_rule_multiple_phrases_dedupe():
-    hits = safety.scan("가슴을 쥐어짜는 것 같고 식은땀이 나")
-    assert [h["_kind"] for h in hits] == ["medical_emergency"]  # '가슴을 쥐어'+'식은땀' → 1건
+    # '식은땀'은 이제 심장/호흡 문맥과 결합해야 발동 — 아래 두 구문 모두 같은 규칙이라 1건
+    hits = safety.scan("가슴을 쥐어짜는 것 같고 식은땀이 나고 가슴이 조여")
+    assert [h["_kind"] for h in hits] == ["medical_emergency"]  # '가슴을 쥐어'+'식은땀이 나고 가슴' → 1건
 
 
 # ---- SF-03: 매칭 직후 부정 표현은 오탐 방지 ----
@@ -67,11 +69,19 @@ def test_dizziness_match_and_negation():
     assert _kinds("어지럽지는 않아") == set()
 
 
-# ---- SF-09: 부정 윈도 7자 한계 — 안전측 오탐 현행 고정 ----
-def test_negation_window_limit_pinned_safe_side():
-    """'죽고 싶다는 생각은 없어'는 부정('없')이 매칭 지점에서 7자 밖이라 suicide_acute로
-    잡힌다. 생명 신호는 미탐(놓침)보다 오탐이 낫다는 안전측 선택 — 현행 의도로 고정."""
-    assert "suicide_acute" in _kinds("죽고 싶다는 생각은 없어")
+# ---- SF-09: 명사화 부정은 정확히 미매칭 (S4 정밀화) ----
+def test_nominalized_negation_excluded_precisely():
+    """'죽고 싶다는 생각은 없어/안 해요'는 구절을 직접 부정하는 '명사화 부정' —
+    좁은 창에서 표지('다는')와 부정어('없/안')의 동시 출현으로 정확히 걸러낸다.
+    (과거 7자 창 한계로 인한 '안전측 오탐'을 제거함.)"""
+    assert "suicide_acute" not in _kinds("죽고 싶다는 생각은 없어")
+    assert "suicide_acute" not in _kinds("죽고 싶다는 생각은 없어요")
+    assert "suicide_acute" not in _kinds("죽고 싶다는 생각은 안 해요")
+    # 참-양성은 그대로: 소망/의도가 살아 있는 발화는 계속 잡는다
+    assert "suicide_acute" in _kinds("죽고 싶다는 생각이 자꾸 들어요")
+    # 무관한 뒷절의 '없'은 참-양성을 억누르지 않는다
+    assert "medical_soon" in _kinds("숨이 차고 기운이 없어")
+    assert "medical_soon" in _kinds("가슴이 뻐근하고 힘이 없어")
 
 
 # ---- SF-10: 앞에서 부정된 구문이 뒤에서 재출현하면 매칭 ----

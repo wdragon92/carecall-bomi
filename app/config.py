@@ -75,15 +75,16 @@ class Settings(BaseSettings):
     def welfare_key(self, scope: str) -> str:
         """scope: 'central' | 'local'. 서비스별 키 우선, 없으면 공용 키."""
         specific = self.welfare_central_api_key if scope == "central" else self.welfare_local_api_key
-        return (specific or self.welfare_api_key).strip()
+        # strip 후 판정 — 공백만 든 서비스별 키가 공용 폴백을 가로막지 않도록
+        return specific.strip() or self.welfare_api_key.strip()
 
     # 앱 파라미터
     app_host: str = "127.0.0.1"
     app_port: int = 8080  # 8000은 Windows 예약대역(7902-8001)에 걸려 바인딩 실패할 수 있음
     clova_llm_model: str = "HCX-007"   # 분석(추출/리포트)용 — reasoning
     clova_chat_model: str = "HCX-005"  # 채팅용 — 빠른 스트리밍
-    clova_tts_voice: str = "vmikyung"
-    clova_tts_speed: int = 0  # -5(빠름)~10(느림), 0=기본
+    clova_tts_voice: str = "vgoeun"  # 배포 실값
+    clova_tts_speed: int = -2  # -5(빠름)~10(느림), 0=기본 · 배포 실값 -2
     clova_tts_question_pitch: int = 0  # '?' 문장 끝음 올림(-5~5). 기본 0=끔 — 청취 결과 원음 유지 선택
     max_upload_mb: int = 5
     session_ttl_min: int = 120

@@ -60,6 +60,16 @@ async def lifespan(app: FastAPI):
             await sweeper
         except asyncio.CancelledError:
             pass
+        # real provider들의 httpx 클라이언트 정리 (mock엔 aclose 없음 → getattr 가드)
+        providers = getattr(app.state, "providers", None)
+        for name in ("llm", "stt", "tts", "ocr", "embed"):
+            aclose = getattr(getattr(providers, name, None), "aclose", None)
+            if aclose is None:
+                continue
+            try:
+                await aclose()
+            except Exception as exc:  # noqa: BLE001 — 종료 정리는 앱을 죽이지 않음
+                log.warning("provider '%s' aclose 실패: %s", name, exc)
 
 
 def create_app() -> FastAPI:

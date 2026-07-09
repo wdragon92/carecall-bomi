@@ -153,6 +153,100 @@ def test_alien_tokens_zero_bm25(mock_rt):
     assert r.bm25_top == 0.0
 
 
+# ---- RG-16b: 지역가드가 상위 청크를 걸러도 k를 채우고, 게이트는 생존 청크 기준 (C2·C5) ----
+def test_region_filter_then_cut_fills_k_and_gate_uses_survivors():
+    """RRF 상위(문경 지자체 카드)가 지역가드로 걸러져도 필터→절단 순서라 k=4를 채운다(C2).
+    게이트 신호(gate_top)는 걸러진 전역 top이 아니라 생존 청크 최고값을 쓴다(C5)."""
+    from app.rag.index import VectorIndex
+
+    # cosine(q=[1,0]) = 1.0, .96, .8, .6, .28, 0 — 상위 2건이 문경(지역가드 대상)
+    emb = np.array([[1, 0], [0.96, 0.28], [0.8, 0.6], [0.6, 0.8], [0.28, 0.96], [0, 1]],
+                   dtype="float32")
+    chunks = [
+        DocChunk(text=f"c{i}", source="s",
+                 fields={"서비스명": f"S{i}", "지역": ("문경시" if i < 2 else "")})
+        for i in range(6)
+    ]
+    rt = RagRuntime(chunks, VectorIndex(emb), None, {})
+    q = np.array([1.0, 0.0], dtype="float32")
+
+    r = hybrid_retrieve(rt, q, "밥을 못 먹어", k=4, region="대구")
+    names = [c.fields["서비스명"] for c, _ in r.items]
+    assert names == ["S2", "S3", "S4", "S5"]  # 문경(S0·S1) 제외 후에도 4건 — 필터→절단(C2)
+    assert r.top_score == pytest.approx(1.0)   # 전역 신호는 필터 이전 top (S0)
+    assert r.gate_top == pytest.approx(0.8)    # 게이트는 생존 최고 (S2) — C5
+
+    s = Settings(_env_file=None, rag_score_threshold=0.5, rag_score_threshold_high=0.9,
+                 rag_bm25_evidence=99.0)
+    assert passes_gate(r, s, "real") is False  # gate_top(0.8) < high(0.9) → 거부 (C5)
+    # 대조: 전역 top(1.0)으로 판정했다면(구 동작) 승인됐을 것
+    assert passes_gate(Retrieval(r.items, r.top_score, r.bm25_top), s, "real") is True
+
+
+# ---- RG-17b: BM25 단독(벡터 풀 밖) 청크도 실제 코사인으로 min_vec 판정 (C3) ----
+def test_bm25_only_chunk_scored_by_real_vector_sim():
+    """pool 밖이라 vec_of에 없던 BM25 매칭 청크를 0.0이 아니라 실제 코사인으로 평가.
+    코사인 0.5 ≥ min_vec 0.3 이면 생존(구 코드는 0.0으로 단정해 항상 탈락)."""
+    from app.rag.index import VectorIndex
+
+    class _FakeBM25:  # 토큰 무시·고정 점수 — rank_bm25 비의존 결정적 입력
+        def __init__(self, scores):
+            self._s = np.asarray(scores, dtype="float64")
+
+        def get_scores(self, tokens):
+            return self._s
+
+    # cosine(q=[1,0]): S0=.9 S1=.8 (풀 top-2), S4=.5 (풀 밖), S2=.2 S3=.1
+    emb = np.array([[0.9, np.sqrt(1 - 0.81)], [0.8, 0.6], [0.2, np.sqrt(1 - 0.04)],
+                    [0.1, np.sqrt(1 - 0.01)], [0.5, np.sqrt(1 - 0.25)]], dtype="float32")
+    chunks = [DocChunk(text=f"c{i}", source="s", fields={"서비스명": f"S{i}"}) for i in range(5)]
+    rt = RagRuntime(chunks, VectorIndex(emb), _FakeBM25([0, 0, 0, 0, 5.0]), {})
+    q = np.array([1.0, 0.0], dtype="float32")
+
+    r = hybrid_retrieve(rt, q, "무엇이든", k=3, pool=2, min_vec=0.3)
+    names = [c.fields["서비스명"] for c, _ in r.items]
+    assert "S4" in names  # 실제 코사인 0.5 ≥ 0.3 → 생존 (C3)
+    assert r.gate_bm25 == pytest.approx(5.0)  # 생존 청크의 BM25 증거가 게이트 신호로
+
+
+# ---- RG-14b: 대상/지원이 접두 중복이면 지원 줄 생략 (C9) ----
+def test_compose_card_dedups_prefix_benefit():
+    target = "저소득 어르신의 생활 안정을 위해 매달 일정 금액을 지원하는 제도입니다"
+    benefit = target + " 자세한 내용은 가까운 주민센터에서 확인하세요"  # 대상의 접두 확장(180/220 컷 모사)
+    chunk = DocChunk(text="", source="s", fields={}, collected_at="2026-07-01")
+    fields = {"서비스명": "테스트제도", "지원대상": target, "지원내용": benefit}
+    text, _ = compose_card(chunk, fields, live=False)
+    assert "· 대상:" in text
+    assert "· 지원:" not in text  # 접두 중복 → 지원 줄 생략
+
+    # 접두 관계가 아니면 지원 줄은 정상 표기
+    fields2 = {"서비스명": "테스트제도", "지원대상": "만 65세 이상", "지원내용": "월 최대 34만 원"}
+    text2, _ = compose_card(chunk, fields2, live=False)
+    assert "· 지원: 월 최대 34만 원" in text2
+
+
+# ---- RG-15b: live 상세조회 성공 시 표시 기준일이 오늘로 갱신 (C9) ----
+async def test_refresh_detail_live_updates_base_date(monkeypatch):
+    from datetime import date
+
+    from app.rag import fetch as rag_fetch
+
+    async def _fake_detail(settings, serv_id, scope="central"):
+        return {"지원내용": "실시간 갱신된 지원 내용"}
+
+    monkeypatch.setattr(rag_fetch, "fetch_detail", _fake_detail)
+    chunk = DocChunk(text="", source="s", source_type="api", serv_id="WLF00000001",
+                     fields={"서비스명": "테스트", "_scope": "central"}, collected_at="2026-01-01")
+    fields, live = await refresh_detail(SimpleNamespace(), chunk)
+    assert live is True
+    today = date.today().isoformat()
+    assert fields.get("_collected_at") == today  # 오늘로 갱신
+
+    text, _ = compose_card(chunk, fields, live=True)
+    assert f"· 정보 기준일: {today} · 방금 확인" in text
+    assert "2026-01-01" not in text  # 캐시 날짜가 아니라 방금 확인한 오늘
+
+
 # ---- RG-18: 임베딩 장애 → 수다 경로로 조용히 폴백 (칩 소음 없음) ----
 class _RecSess(SimpleNamespace):
     async def send(self, payload):

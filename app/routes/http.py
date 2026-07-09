@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import re
 import secrets
+import unicodedata
 
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse, Response
@@ -45,8 +46,11 @@ def _clean_for_tts(text: str) -> str:
     t = re.sub(r"\s+", " ", t).strip()
     # 낭독 페이싱: "잘 안 ~"를 붙여 읽어 어색 → 쉼표로 ~0.2초 숨 (화면 표시는 원문 그대로)
     t = t.replace("잘 안 ", "잘, 안 ")
+    # 숫자/하이픈 경계 + '천단위·소수 구분자에 붙은 숫자'만 제외 — "119,000원"의 119는
+    # 낭독 치환하지 않되("일일구,000원" 방지), "자살예방 109, 응급 119," 같은 목록의
+    # 쉼표(뒤가 숫자 아님)는 전화번호로 낭독한다.
     for num, read in _HOTLINE_READS:  # 긴 번호부터 치환(부분 겹침 방지 순서)
-        t = re.sub(rf"(?<![\d-]){re.escape(num)}(?![\d-])", read, t)
+        t = re.sub(rf"(?<![\d-])(?<![\d][.,]){re.escape(num)}(?![\d-])(?![.,]\d)", read, t)
     return t[:1900]
 
 
@@ -160,8 +164,12 @@ async def rag_reload(request: Request) -> dict:
 
     providers = request.app.state.providers
     rt = load_runtime(request.app.state.settings, providers.modes.get("embed", "mock"))
-    providers.rag = rt
-    return {"loaded": rt is not None, "chunks": len(rt.chunks) if rt else 0}
+    # 로드 실패(None: 재빌드 산출물 없음/손상)면 기존 인덱스를 유지해 무중단 보장.
+    # (무조건 providers.rag = rt 하면 살아있던 인덱스가 None으로 지워져 RAG가 죽는다.)
+    if rt is not None:
+        providers.rag = rt
+    cur = providers.rag
+    return {"loaded": cur is not None, "chunks": len(cur.chunks) if cur else 0}
 
 
 @router.post("/api/sessions")
@@ -199,6 +207,7 @@ async def upload_audio(sid: str, request: Request, file: UploadFile = File(...))
     """음성(WAV) → STT 텍스트만 반환. 클라이언트가 user_message(via=voice)로 재전송."""
     store = request.app.state.store
     providers = request.app.state.providers
+    settings = request.app.state.settings
 
     sess = store.get(sid)
     if sess is None:
@@ -207,16 +216,28 @@ async def upload_audio(sid: str, request: Request, file: UploadFile = File(...))
     data = await file.read()
     if not data:
         raise HTTPException(status_code=400, detail="empty audio")
+    max_bytes = settings.max_upload_mb * 1024 * 1024  # 이미지 경로와 동일한 업로드 상한
+    if len(data) > max_bytes:
+        raise HTTPException(status_code=413, detail=f"file too large (>{settings.max_upload_mb}MB)")
 
     try:
         text = await providers.stt.transcribe(data)
     except Exception as exc:  # noqa: BLE001
-        log.warning("stt real failed (%s) → mock", exc)
-        try:
-            text = await providers.mstt.transcribe(data)
-        except Exception as exc2:  # noqa: BLE001
-            log.error("stt mock failed: %s", exc2)
+        # 전체 데모(stt=mock)만 MockSTT 폴백 유지. real STT 실패 시 mock으로 폴백하면
+        # 각본 문장(가짜 발화)이 실제 발화로 반환되므로, real 실패는 ""로 두어
+        # 프론트의 "(음성을 알아듣지 못했어요)"를 유도한다.
+        if providers.modes.get("stt") == "mock":
+            log.warning("stt mock failed (%s) → 재시도", exc)
+            try:
+                text = await providers.mstt.transcribe(data)
+            except Exception as exc2:  # noqa: BLE001
+                log.error("stt mock failed: %s", exc2)
+                text = ""
+        else:
+            log.warning("stt real failed (%s) → 빈 결과(각본 폴백 금지)", exc)
             text = ""
+    # ingress NFC 정규화 — ws user_message와 동일 규약으로 통일(안전망·복지매칭 우회 방지)
+    text = unicodedata.normalize("NFC", text)
     return {"text": text}
 
 

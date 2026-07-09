@@ -19,7 +19,10 @@ class DocChunk:
 
 
 def card_hash(svc: dict) -> str:
-    """서비스 원본 dict의 변경감지 해시 — 바뀐 카드만 재임베딩 (v2 §4-1)."""
+    """서비스 원본 dict의 변경감지 해시 (v2 §4-1 설계 원형).
+    ⚠️ C13: 현재 파이프라인은 이 함수를 쓰지 않는다 — 증분 재임베딩은 카드 텍스트 기준
+    text_hash(index.build_index)를 단일 키로 사용한다. 원본 dict 단위 변경감지가 필요할 때를
+    위한 참조용으로 남겨둔다(가이드/문서 정합성)."""
     return hashlib.md5(json.dumps(svc, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
 
 

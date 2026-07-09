@@ -109,8 +109,12 @@ class Retrieval:
     """하이브리드 검색 결과 + 거부 게이트용 신호."""
 
     items: list[tuple[DocChunk, float]] = field(default_factory=list)  # RRF 상위 k
-    top_score: float = 0.0  # 벡터 top1 코사인 (의미 신호)
-    bm25_top: float = 0.0   # BM25 최고점 (어휘 증거 신호)
+    top_score: float = 0.0  # 벡터 top1 코사인 (전역 의미 신호 — 관측·리포트용, 필터 이전)
+    bm25_top: float = 0.0   # BM25 최고점 (전역 어휘 증거 신호, 필터 이전)
+    # 게이트용 신호 — 필터(min_vec·region) 생존 후보 기준 최고값. None이면 전역값으로 폴백.
+    # (지역가드로 걸러진 고점 청크가 접지 승인에 기여하는 것을 막는다 — passes_gate)
+    gate_top: float | None = None
+    gate_bm25: float | None = None
 
 
 # 광역 지자체 약칭 — 질의의 "경북" 발화가 "경상북도" 카드를 허용하게
@@ -157,7 +161,8 @@ def hybrid_retrieve(
 
     fused: dict[int, float] = {}
     for r, i in enumerate(vidx):
-        fused[i] = fused.get(i, 0.0) + 1.0 / (rrf_k + r + 1)
+        fused[int(i)] = fused.get(int(i), 0.0) + 1.0 / (rrf_k + r + 1)
+    bscores = None
     bm25_top = 0.0
     if rt.bm25 is not None:
         bscores = rt.bm25.get_scores(tokenize(qtext))
@@ -167,12 +172,39 @@ def hybrid_retrieve(
                 break
             fused[int(i)] = fused.get(int(i), 0.0) + 1.0 / (rrf_k + r + 1)
 
-    order = sorted(fused.items(), key=lambda x: -x[1])[:k]
-    items = [
-        (rt.chunks[i], s) for i, s in order
-        if vec_of.get(i, 0.0) >= min_vec and region_ok(rt.chunks[i], region, qtext)
-    ]
-    return Retrieval(items, top_score, bm25_top)
+    # 항목별 벡터 유사도: 벡터 풀(top-pool) 밖의 BM25 단독 청크는 실제 코사인을 계산한다.
+    # (0.0으로 단정하면 min_vec>0에서 어휘로 걸린 청크가 항상 탈락 — C3)
+    emb = rt.vindex.embeddings
+    qn = np.asarray(qvec, dtype="float32").reshape(-1)
+    qnorm = float(np.linalg.norm(qn))
+    if qnorm:
+        qn = qn / qnorm
+
+    def _vsim(i: int) -> float:
+        s = vec_of.get(i)  # 풀에 있으면 검색이 준 실측 코사인 (0.0/음수도 유효)
+        if s is not None:
+            return s
+        if 0 <= i < len(emb) and emb.ndim == 2 and emb.shape[1] == qn.shape[0]:
+            return float(emb[i] @ qn)  # emb는 정규화 저장 → 내적 = 코사인
+        return 0.0
+
+    # 필터(min_vec·region)를 먼저 적용하고 그 다음 RRF 상위 k로 절단한다 (C2).
+    # 게이트 신호(gate_top/gate_bm25)도 필터 생존 후보 기준으로 산출한다 (C5).
+    order = sorted(fused.items(), key=lambda x: -x[1])
+    items: list[tuple[DocChunk, float]] = []
+    gate_top = 0.0
+    gate_bm25 = 0.0
+    for i, s in order:
+        vs = _vsim(i)
+        if vs < min_vec or not region_ok(rt.chunks[i], region, qtext):
+            continue
+        if vs > gate_top:
+            gate_top = vs
+        if bscores is not None and float(bscores[i]) > gate_bm25:
+            gate_bm25 = float(bscores[i])
+        if len(items) < k:
+            items.append((rt.chunks[i], s))
+    return Retrieval(items, top_score, bm25_top, gate_top, gate_bm25)
 
 
 def passes_gate(r: Retrieval, settings, embed_mode: str) -> bool:
@@ -182,9 +214,11 @@ def passes_gate(r: Retrieval, settings, embed_mode: str) -> bool:
         return False
     low = settings.rag_threshold(embed_mode)
     high = settings.rag_threshold_high(embed_mode)
-    return r.top_score >= high or (
-        r.top_score >= low and r.bm25_top >= settings.rag_bm25_min(embed_mode)
-    )
+    # 필터 생존 후보 기준 신호로 판정 (C5). 미설정(None)이면 전역값 폴백 — 직접 구성된
+    # Retrieval(수치표 테스트 등)과의 호환. 필터가 아무 것도 걸러내지 않으면 두 값은 동일.
+    top = r.top_score if r.gate_top is None else r.gate_top
+    bm = r.bm25_top if r.gate_bm25 is None else r.gate_bm25
+    return top >= high or (top >= low and bm >= settings.rag_bm25_min(embed_mode))
 
 
 # '알려줘' 단독은 새 주제 질문("로또 번호 알려줘")에도 흔해 오증강 위험 — '자세히'만 후속 신호로 인정

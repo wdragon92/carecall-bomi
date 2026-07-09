@@ -16,7 +16,10 @@ def _utcnow() -> datetime:
 
 
 def finding_id(category: str, content: str) -> str:
-    return hashlib.sha1(f"{category}|{content[:20]}".encode("utf-8")).hexdigest()[:8]
+    # 전체 content 해시 — content[:20]만 쓰면 앞 20자가 같은 '서로 다른/에스컬레이션된
+    # 관찰'이 같은 id로 접혀 하나가 유실된다. 동일 content는 여전히 같은 id →
+    # 안전망·LLM 교차 dedupe(extraction._merge, EX-01)는 그대로 유지.
+    return hashlib.sha1(f"{category}|{content}".encode("utf-8")).hexdigest()[:8]
 
 
 class Session:
@@ -139,6 +142,15 @@ class SessionStore:
             sess.touch()
             self._sessions.move_to_end(sid)
         return sess
+
+    def bump(self, sid: str) -> None:
+        """활동(대화 턴) 시 LRU 순서 갱신 — WS 대화는 sess 참조를 오래 붙들고 store.get()을
+        다시 부르지 않아, 대화 중 활성 세션이 create()의 용량 축출(popitem) 대상이 되던
+        문제를 막는다. get()과 같은 락-프리 move_to_end 패턴."""
+        sess = self._sessions.get(sid)
+        if sess is not None:
+            sess.touch()
+            self._sessions.move_to_end(sid)
 
     async def drop(self, sid: str) -> None:
         async with self._lock:

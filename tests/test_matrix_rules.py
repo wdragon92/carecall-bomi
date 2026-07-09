@@ -23,6 +23,14 @@ def test_income_selection_boundaries_2026():
     assert v == "가능성낮음" and "395.2만" in m
 
 
+# ---- RL-02b: '가능성높음' 멘트에 재산 환산 캐비엇 (자산보유 저소득 과잉확신 완화, C12) ----
+def test_high_likelihood_mentions_asset_conversion_caveat():
+    v, m = check_basic_pension(72, "single", 100)  # 원천소득 100만 << 기준 247만 → 가능성높음
+    assert v == "가능성높음"
+    assert "재산" in m  # 소득인정액=소득+재산 환산이라는 캐비엇으로 false-positive 완화
+    assert "신청" in m  # 신청 연계 안내는 유지
+
+
 # ---- RL-03: 이상 가구값("alone")은 th=None 폴백 — 크래시 없이 확인필요 ----
 def test_unknown_household_value_falls_back_gracefully():
     v, m = check_basic_pension(70, "alone", 100)

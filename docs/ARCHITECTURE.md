@@ -30,12 +30,12 @@
 
 - **기본 실행 = 로컬 데모.** 단, 공개 시연용 NCP 서버가 별도 프로비저닝돼 있다(서버 142948660 carecall-bomi·VPC 142283·서브넷 309427·ACG 365174·공인IP 101.79.26.62 — `deploy/DEPLOY.md`, 철수는 `TEARDOWN.md`). 로컬만 쓰면 프로비저닝 불필요.
 - NCP 의존 = 외부 API 호출 4종뿐. 키가 없거나 실패하면 provider 단위로 mock 폴백.
-- DB 없음. 대화·특이사항은 세션 메모리에만 (요구사항 가드레일 4: 영구 저장 금지).
+- 세션(대화·특이사항)은 **인메모리**에만 두고 영구 저장하지 않는다(요구사항 가드레일 4). 유일한 SQLite는 RAG 빌드 로그 `data/rag_meta.db`(stdlib sqlite3, 인덱스 빌드 이력만 — 개인정보·세션 비저장).
 
 ## 2. 디렉토리 구조
 
 ```
-carecall-bomi/          # (설계 시점 발췌 — 실제 트리엔 app/rag/, scripts/, deploy/ 등이 추가됨)
+carecall-bomi/          # (설계 시점 발췌 — 실제 트리엔 app/rag/, app/core/safety.py·prompts_analysis.py, scripts/, deploy/ 등이 추가됨)
 ├── app/
 │   ├── main.py              # FastAPI 앱 생성, lifespan(세션 TTL 스위퍼), 라우터/정적 마운트
 │   ├── config.py            # pydantic-settings로 .env 로딩, MOCK_MODE·provider별 키 존재 판정
@@ -77,12 +77,12 @@ carecall-bomi/          # (설계 시점 발췌 — 실제 트리엔 app/rag/, s
 | 항목 | 결정 | 이유 / 폴백 |
 |---|---|---|
 | Python 실행 | `python -m venv .venv` + `requirements.txt`(하한 핀 `>=`) | Python 3.14라 최신 휠 필요. 설치 실패 시 해당 패키지만 버전 조정 |
-| 의존성 | fastapi, uvicorn[standard], httpx, pydantic-settings, python-multipart, pytest, pytest-asyncio | 최소 구성. DB/ORM/프론트 빌드도구 없음 |
+| 의존성 | fastapi, uvicorn[standard], httpx, pydantic-settings, python-multipart, pytest, pytest-asyncio | 최소 구성. 외부 DB/ORM/프론트 빌드도구 없음(RAG 빌드 로그만 stdlib sqlite3) |
 | LLM 채팅 | **HCX-005 확정** 스트리밍 (설계 초안은 HCX-007 후보였으나 지연·빈응답으로 채팅은 005 확정) | 분석/추출은 HCX-007 유지 |
 | LLM 추출 | Structured Output(JSON Schema) 시도 → 모델 제약으로 불가 시 "JSON만 출력" 프롬프트 + 견고 파서(코드펜스 제거→json.loads→1회 재시도) | 요구사항 문서가 경고한 기능조합 제약 대응 |
 | STT | **CSR(짧은 문장 인식)** — 푸시투토크 턴 단위에 적합 | 장문 CLOVA Speech(도메인 빌더)는 대안. 계정에서 CSR 불가 시에만 전환 |
 | 오디오 포맷 | **브라우저에서 PCM 캡처 → JS로 WAV(16kHz mono 16bit) 인코딩 → 업로드** | MediaRecorder webm은 CSR 미지원 위험. WAV면 서버 트랜스코딩(ffmpeg) 불필요 → 로컬 의존성 zero |
-| TTS | CLOVA Voice **프리미엄** 보이스, 기본 `vmikyung`(차분한 중년 여성) mp3 | 노인 친화 톤. 보이스명 [문서확인] 후 콘솔 목록에서 최적 선택 |
+| TTS | CLOVA Voice **프리미엄** 보이스, **확정 `vgoeun`·속도 -2** mp3(청감 튜닝; `.env`/persona §2가 기준. 설계 초안은 vmikyung) | 노인 친화 톤 |
 | OCR | CLOVA OCR **General** 도메인, base64 JSON 방식 | 고지서·안내문·문자캡처 범용 |
 | 프론트 | 단일 index.html + app.js + Tailwind CDN. 빌드 없음 | 요구사항 그대로. CDN 실패 대비 최소 fallback CSS 몇 줄 인라인 |
 | 실시간 | WS 1본(세션당): 채팅 + 패널 갱신 + 알림 모두 이 채널 | STT/OCR/TTS는 REST(파일·바이너리 처리에 적합) |
@@ -185,7 +185,7 @@ class OCRProvider(Protocol):
 | CLOVA Voice Premium | `POST https://naveropenapi.apigw.ntruss.com/tts-premium/v1/tts`, 동일 헤더 2종, form-urlencoded `speaker/text/format=mp3/speed`, 응답 mp3 바이너리. 보이스 목록에서 노인 친화 보이스 확정 |
 | CLOVA OCR | `POST {CLOVA_OCR_INVOKE_URL}`, 헤더 `X-OCR-SECRET`, body JSON `{version:"V2", requestId, timestamp, images:[{format, name, data: base64}]}`, 응답 `images[].fields[].inferText` 조합 |
 
-공통: httpx.AsyncClient 싱글턴(타임아웃 일반 15s/스트림 30s), 실패 1회 재시도, ProviderError로 래핑. 전역 추출 semaphore(3)로 QPM 보호.
+공통: httpx.AsyncClient 싱글턴(타임아웃 일반 15s/스트림 30s), 실패 1회 재시도, ProviderError로 래핑. QPM 보호는 임베딩 배치의 호출 간격(sleep)+429 백오프(build_index.py)와 추출의 세션별 코얼레싱 락(§8.3)으로 — 전역 세마포어는 두지 않는다.
 
 ### 7.3 Mock 사양 (키 없이도 데모가 "살아있게")
 
@@ -217,7 +217,7 @@ class OCRProvider(Protocol):
 ## 9. 프롬프트 & 가드레일 매핑
 
 > **현행화(2026-07-07):** AI 페르소나는 **"보미"** 로 리브랜딩되었고, 정체성·말투·행동의 단일 기준(SSoT)은
-> **`docs/bomi-persona.md` v1.0**이다 — 본 절과 그 문서가 다르면 문서가 우선한다.
+> **`docs/bomi-persona.md`(현행 v1.3)**이다 — 본 절과 그 문서가 다르면 문서가 우선한다.
 > 프롬프트 파일은 둘로 분리: `core/prompts.py`(대화·보미) / `core/prompts_analysis.py`(추출·분류·리포트 — HCX-007).
 > 또한 §3·§6의 "SSE 스트리밍 중계"는 **통짜 응답 + ai_turn 말풍선 페이싱**(TTS 싱크)으로 대체되었고,
 > 추출 결과는 패널뿐 아니라 **[어르신 상황 메모]로 다음 턴 대화 프롬프트에 환류**된다(페르소나 §9).
@@ -227,7 +227,7 @@ class OCRProvider(Protocol):
 | 1. 진단 금지 | CHAT+EXTRACT 프롬프트("관찰만, '~로 보입니다' 단정 금지") + 리포트 헤더에 "참고용, 진단 아님" 고정 문구(코드) |
 | 2. 긴급은 사람에게 | EXTRACT가 긴급 분류 → **코드 강제 규칙**: `category=="긴급" or (심각도=="높음" and 사람_개입_필요)` → `urgent_alert` push + UI 상단 고정 배너 "보호자/담당자/119 연결을 권고합니다" (LLM 판단과 무관하게 코드가 발동). 프롬프트에 "실제 연락처 생성 금지" |
 | 3. 복지 정확성 | CHAT 프롬프트에 welfare.json 다이제스트 주입 + "금액·자격은 아래 자료에만 근거, 없으면 '복지로(129)·주민센터 확인' 안내" |
-| 4. 프라이버시 | 코드: 이미지 바이트 즉시 폐기, DB 없음, 세션 TTL 폐기, 로그 truncate. README에 소버린 AI 한 줄 |
+| 4. 프라이버시 | 코드: 이미지 바이트 즉시 폐기, 세션 인메모리·TTL 폐기(영구 저장 없음; SQLite는 RAG 빌드 로그 rag_meta.db뿐), 로그 truncate. README에 소버린 AI 한 줄 |
 | 5. 위로하되 치료 아님 | CHAT 프롬프트 + 정서 높음 시 사람 연결 플래그(코드) |
 | 6. 말투 | CHAT 프롬프트(존댓말·짧은 문장·쉬운 단어·질문 하나씩) + maxTokens 제한 |
 
@@ -275,7 +275,8 @@ class OCRProvider(Protocol):
 ## 12. 테스트 전략
 
 pytest (전부 MOCK_MODE 강제, `tests/conftest.py`에서 env 오버라이드):
-`test_health` / `test_session_create` / `test_ws_chat_roundtrip` / `test_two_sessions_isolated`(세션 2개 동시 대화, 교차 오염 검증 — 완료 기준 3) / `test_extraction_updates_findings` / `test_urgent_triggers_alert` / `test_ocr_flow` / `test_stt_endpoint` / `test_tts_returns_audio` / `test_welfare_matching` / `test_report_generated`.
+(설계 시점 시드 목록 — 실제 스위트는 매트릭스·기능계약·안전·RAG 테스트까지 확장되어 현재 **184개**):
+`test_health` / `test_session_create` / `test_two_sessions_isolated`(세션 2개 동시 대화, 교차 오염 검증 — 완료 기준 3) / `test_extraction_updates_findings` / `test_urgent_triggers_alert` / `test_ocr_flow` / `test_stt_endpoint` / `test_tts_returns_audio` / `test_welfare_matching` / `test_report_generated`.
 
 수동 데모 체크(7단계에서 DEMO_SCENARIO.md로 정리): 선인사→텍스트 티키타카→"잠을 못 자요"(건강 카드)→"혼자 살아서 외로워"(정서+복지 매칭)→스미싱 캡처 첨부(사기 카드)→마이크 발화→음성 토글→상담 마치기(리포트 모달). 브라우저 2개(일반+시크릿) 동시 진행해 격리 확인.
 
