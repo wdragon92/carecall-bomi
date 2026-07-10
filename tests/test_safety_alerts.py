@@ -93,37 +93,40 @@ def test_fraud_dialect_variants():
         assert "fraud_exposure" in kinds, utter
 
 
-def test_s13_fraud_completion_routes_to_112_not_109():
-    """S13 완료형 사기 노출(링크 클릭·개인정보·불러준 계좌)도 112·1332로 — 109 오연계 금지."""
-    for utter in ["링크를 눌렀어", "비밀번호를 불러줬어", "불러준 계좌로 부쳤어"]:
-        kinds = {d["_kind"] for d in safety.scan(utter)}
-        assert "fraud_exposure" in kinds, utter
-        level, msg = safety.alert(kinds)
-        assert level == "warning" and "112" in msg and "1332" in msg and "109" not in msg, utter
+def test_fraud_routes_to_112_not_109():
+    """사기 노출(지시형·기관사칭)은 112·1332로 — 109 오연계 금지."""
+    kinds = {d["_kind"] for d in safety.scan("검찰이라면서 돈을 보내라는 문자가 왔어")}
+    assert "fraud_exposure" in kinds
+    level, msg = safety.alert(kinds)
+    assert level == "warning" and "112" in msg and "1332" in msg and "109" not in msg
+    # 완료형 문구(가족송금·카톡링크 오발)는 제거됨 — 발동 안 함
+    assert "fraud_exposure" not in {d["_kind"] for d in safety.scan("카톡 링크를 눌렀어")}
 
 
-def test_s13_numbness_routes_to_care_not_emergency():
-    """S13 편측 저림·방사통은 빠른 진료(warning)+보호자 — 109/119 미노출(단독 저림 과알람 방지)."""
-    kinds = {d["_kind"] for d in safety.scan("왼팔이 저리고 손발이 저려")}
+def test_cardiac_radiation_routes_to_care_not_emergency():
+    """심장 방사통(팔·턱)은 빠른 진료(warning)+보호자 — 109/119 미노출."""
+    kinds = {d["_kind"] for d in safety.scan("턱이 아프고 팔이 저려")}
     assert "medical_soon" in kinds and "medical_emergency" not in kinds
     level, msg = safety.alert(kinds)
     assert level == "warning" and "진료" in msg and "보호자" in msg
     assert "109" not in msg and "119" not in msg
+    # 단독·양측 저림은 자세성 오발이 커 제외
+    assert "medical_soon" not in {d["_kind"] for d in safety.scan("자고 일어났더니 손발이 저려")}
 
 
 def test_s13_passive_suicide_additions_keep_109():
     """S13 완곡 죽음 소망 보강 문구도 109 연계(warning)로 이어진다."""
-    for utter in ["저세상 가고 싶어", "사라지고 싶어", "다 끝내고 싶어"]:
+    for utter in ["저세상 가고 싶어", "하늘나라 가고 싶어", "죽는 게 나아"]:
         kinds = {d["_kind"] for d in safety.scan(utter)}
         assert "suicide_warning" in kinds, utter
         level, msg = safety.alert(kinds)
         assert level == "warning" and "109" in msg, utter
 
 
-def test_s12_homonym_no_false_emergency():
-    """S12 동음이의(일상어)는 경보를 발동하지 않는다 — 오경보 피로 방지."""
-    for utter in ["올해는 농약 쳤어", "고기 구우려고 번개탄 샀어", "그럼 나 먼저 간다",
-                  "긴장돼서 식은땀 났어"]:
+def test_gated_homonym_no_false_emergency():
+    """게이팅 유지 표층(유서 깊은·먼저 간다·식은땀)은 경보 미발동 — 오경보 피로 방지.
+    (농약·번개탄 등 method 어휘는 안전-우선으로 bare — 오탐 감수하고 미탐 방지)."""
+    for utter in ["이 동네는 유서 깊은 곳이야", "그럼 나 먼저 간다", "긴장돼서 식은땀 났어"]:
         assert safety.alert({d["_kind"] for d in safety.scan(utter)})[0] is None, utter
 
 

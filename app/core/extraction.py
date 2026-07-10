@@ -34,8 +34,11 @@ def _parse_findings(raw_list) -> list[Finding]:
     return out
 
 
+_MAX_FINDINGS = 40  # findings 상한 — LLM '내용' 문구 드리프트로 근접중복이 무한 누적되는 것 방지
+
+
 def _merge(*groups: list[Finding]) -> list[Finding]:
-    # 앞선 그룹 우선(안전망 → LLM → 기존 findings). id 기준 중복 제거로 무한 누적 방지.
+    # 앞선 그룹 우선(안전망 → LLM → 기존 findings). id 기준 정확중복 제거.
     merged: list[Finding] = []
     seen: set[str] = set()
     for group in groups:
@@ -44,17 +47,23 @@ def _merge(*groups: list[Finding]) -> list[Finding]:
                 continue
             seen.add(f.id)
             merged.append(f)
-    return merged
+    # 상한: id dedup은 정확중복만 막으므로 문구가 조금씩 달라지는 근접중복이 선형 누적될 수
+    # 있다(안전망·최신이 앞쪽이라 오래된 것부터 잘림). 실사용 통화는 수~십건 수준이라 무손실.
+    return merged[:_MAX_FINDINGS]
 
 
 async def _send_alert(sess, level: str, message: str) -> None:
-    """경보 전송 + 동일 경보 재전송 억제 — 추출이 누적 대화 전체를 매번 스캔하므로
-    위험 발화 '이후 모든 턴'에 같은 배너가 재전송되던 문제(오경보 피로) 방지.
-    내용·수위가 달라진 경보는 정상 전송(프론트는 emergency→warning 강등만 무시)."""
-    cur = (level, message)
-    if getattr(sess, "last_alert", None) == cur:
+    """경보 전송 + 이미 보낸 (수위,문구) 재전송 억제 — 추출이 누적 대화 전체를 매번 스캔하므로
+    위험 발화 '이후 모든 턴'에 같은 배너가 재전송되던 문제(오경보 피로) 방지. 한 턴에 서로 다른
+    두 경보(의료+사기 등)가 함께 뜰 수 있으므로 단일 슬롯이 아니라 '보낸 경보 집합'으로 관리해야
+    두 경보가 슬롯을 밀어내며 매 턴 재전송되는 핑퐁이 없다. 내용·수위가 달라진 경보는 정상 전송."""
+    key = (level, message)
+    sent = getattr(sess, "sent_alerts", None)
+    if sent is None:
+        sent = sess.sent_alerts = set()
+    if key in sent:
         return
-    sess.last_alert = cur
+    sent.add(key)
     await sess.send({"type": "urgent_alert", "level": level, "message": message})
 
 

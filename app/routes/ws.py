@@ -29,9 +29,9 @@ async def ws_endpoint(websocket: WebSocket, session_id: str) -> None:
         return
 
     sess.ws = websocket
-    # 재접속(새 연결): 직전 위기 배너 dedup 상태를 초기화 — 새 화면에는 위기 배너가
+    # 재접속(새 연결): 보낸 배너 dedup 집합을 초기화 — 새 화면에는 위기 배너가
     # 다시 뜨도록(중복억제로 재접속 시 배너가 영구 소실되던 문제 방지).
-    sess.last_alert = None
+    sess.sent_alerts = set()
     await sess.send({"type": "session_ready", "session_id": session_id, "providers": providers.modes})
     if not sess.messages:  # 재연결 시 인사 중복 방지
         # 접속하자마자 말을 걸면 브라우저 오디오 정책(제스처 전 자동재생 차단)에 첫 인사

@@ -189,20 +189,25 @@ def hybrid_retrieve(
         return 0.0
 
     # 필터(min_vec·region)를 먼저 적용하고 그 다음 RRF 상위 k로 절단한다 (C2).
-    # 게이트 신호(gate_top/gate_bm25)도 필터 생존 후보 기준으로 산출한다 (C5).
+    # 게이트 신호(gate_top/gate_bm25)는 **관련성(min_vec) 통과 후보** 기준으로 산출한다.
+    # 지역(region_ok)은 '어느 카드를 보여줄지'(표시 선택)이지 '답할 수 있는가'(접지 가능)가
+    # 아니므로 게이트 신호엔 반영하지 않는다 — 반영하면 대구 사용자가 물은 병원비 질의에서
+    # 상위 경북 카드가 표시 제외되며 게이트가 무너져 중앙 의료급여 카드(정답)까지 과대거부된다.
+    # 대신 표시할 카드가 하나도 없으면(items 빔) passes_gate가 거부하므로 안전. (min_vec 미달
+    # 잡음은 여전히 게이트에서 제외 — 접지 근거가 되지 못한다.)
     order = sorted(fused.items(), key=lambda x: -x[1])
     items: list[tuple[DocChunk, float]] = []
     gate_top = 0.0
     gate_bm25 = 0.0
     for i, s in order:
         vs = _vsim(i)
-        if vs < min_vec or not region_ok(rt.chunks[i], region, qtext):
+        if vs < min_vec:
             continue
         if vs > gate_top:
             gate_top = vs
         if bscores is not None and float(bscores[i]) > gate_bm25:
             gate_bm25 = float(bscores[i])
-        if len(items) < k:
+        if region_ok(rt.chunks[i], region, qtext) and len(items) < k:
             items.append((rt.chunks[i], s))
     return Retrieval(items, top_score, bm25_top, gate_top, gate_bm25)
 

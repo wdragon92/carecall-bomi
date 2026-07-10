@@ -51,15 +51,15 @@ def test_store_bump_protects_active_session_from_eviction():
     assert store.get(bid) is None       # bump 안 된 오래된 세션이 축출
 
 
-# ---- S8: 재접속 시 last_alert 초기화 → 위기 배너 재전송 허용 ----
+# ---- S8: 재접속 시 sent_alerts 초기화 → 위기 배너 재전송 허용 ----
 def test_ws_reconnect_resets_last_alert(client, app):
     sid = client.post("/api/sessions").json()["session_id"]
     sess = app.state.store.get(sid)
     sess.add_message("user", "이전 대화가 있었음")          # 이미 진행된 세션(재접속 상황)
-    sess.last_alert = ("emergency", "119에 연락하세요")     # 직전 위기 배너 dedup 상태
+    sess.sent_alerts = {("emergency", "119에 연락하세요")}  # 직전 위기 배너 dedup 상태
     with client.websocket_connect(f"/ws/{sid}") as ws:
         assert ws.receive_json()["type"] == "session_ready"
-    assert sess.last_alert is None
+    assert sess.sent_alerts == set()
 
 
 # ---- R3: 잘못된/비-dict 프레임이 턴 루프를 죽이지 않음 (끊김만 종료) ----

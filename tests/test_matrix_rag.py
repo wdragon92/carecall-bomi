@@ -153,10 +153,12 @@ def test_alien_tokens_zero_bm25(mock_rt):
     assert r.bm25_top == 0.0
 
 
-# ---- RG-16b: 지역가드가 상위 청크를 걸러도 k를 채우고, 게이트는 생존 청크 기준 (C2·C5) ----
-def test_region_filter_then_cut_fills_k_and_gate_uses_survivors():
-    """RRF 상위(문경 지자체 카드)가 지역가드로 걸러져도 필터→절단 순서라 k=4를 채운다(C2).
-    게이트 신호(gate_top)는 걸러진 전역 top이 아니라 생존 청크 최고값을 쓴다(C5)."""
+# ---- RG-16b: 지역가드가 상위 청크를 걸러도 k를 채우고(C2), 게이트는 관련성(min_vec) 통과
+#      후보 기준 — 지역필터는 '표시 선택'이지 '답할 수 있는가'가 아님(C5 회귀 수정) ----
+def test_region_filter_fills_k_gate_uses_min_vec_not_region():
+    """RRF 상위(문경 지자체 카드)가 지역가드로 걸러져도 필터→절단이라 k=4를 채운다(C2).
+    게이트 신호는 지역 제외된 상위 청크도 포함(min_vec 통과 기준) — 보여줄 카드(items)가
+    있으면 접지, 없으면 거부. 지역 제외된 이웃 때문에 중앙 카드(정답)가 과대거부되지 않게."""
     from app.rag.index import VectorIndex
 
     # cosine(q=[1,0]) = 1.0, .96, .8, .6, .28, 0 — 상위 2건이 문경(지역가드 대상)
@@ -173,14 +175,18 @@ def test_region_filter_then_cut_fills_k_and_gate_uses_survivors():
     r = hybrid_retrieve(rt, q, "밥을 못 먹어", k=4, region="대구")
     names = [c.fields["서비스명"] for c, _ in r.items]
     assert names == ["S2", "S3", "S4", "S5"]  # 문경(S0·S1) 제외 후에도 4건 — 필터→절단(C2)
-    assert r.top_score == pytest.approx(1.0)   # 전역 신호는 필터 이전 top (S0)
-    assert r.gate_top == pytest.approx(0.8)    # 게이트는 생존 최고 (S2) — C5
+    assert r.top_score == pytest.approx(1.0)
+    assert r.gate_top == pytest.approx(1.0)    # 지역 제외된 S0도 min_vec 통과 → 게이트 기여
 
     s = Settings(_env_file=None, rag_score_threshold=0.5, rag_score_threshold_high=0.9,
                  rag_bm25_evidence=99.0)
-    assert passes_gate(r, s, "real") is False  # gate_top(0.8) < high(0.9) → 거부 (C5)
-    # 대조: 전역 top(1.0)으로 판정했다면(구 동작) 승인됐을 것
-    assert passes_gate(Retrieval(r.items, r.top_score, r.bm25_top), s, "real") is True
+    # 보여줄 중앙/대구 카드(items)가 있으므로 접지 승인 (병원비→의료급여 과대거부 방지)
+    assert passes_gate(r, s, "real") is True
+
+    # 안전장치: min_vec가 대구/중앙 카드를 모두 걸러 items가 비면(보여줄 게 없으면) 거부
+    r2 = hybrid_retrieve(rt, q, "밥을 못 먹어", k=4, min_vec=0.99, region="대구")
+    assert r2.items == []                       # S0(1.0)만 min_vec 통과하나 문경(지역 제외)
+    assert passes_gate(r2, s, "real") is False
 
 
 # ---- RG-17b: BM25 단독(벡터 풀 밖) 청크도 실제 코사인으로 min_vec 판정 (C3) ----

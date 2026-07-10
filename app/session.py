@@ -38,7 +38,7 @@ class Session:
         self.tts_cache: "OrderedDict[str, bytes]" = OrderedDict()
         self.extract_lock = asyncio.Lock()
         self.extract_dirty = False
-        self.last_alert: tuple | None = None  # 직전 긴급 배너(수위, 문구) — 동일 경보 재전송 억제
+        self.sent_alerts: set = set()  # 이번 세션에 보낸 (수위,문구) 경보 — 재전송 억제(핑퐁 방지)
         self.crisis_hold: tuple[str, int] | None = None  # (수위, 남은 턴) — 위기 후속 턴 지침 유지
         self.ws = None  # 활성 WebSocket (있으면)
         self.send_lock = asyncio.Lock()  # WS 동시 전송 직렬화
