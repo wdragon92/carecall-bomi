@@ -40,6 +40,7 @@ async def ws_endpoint(websocket: WebSocket, session_id: str) -> None:
         await asyncio.sleep(max(0.0, settings.greet_delay_seconds))
         await conversation.greet(sess)
 
+    recv_errors = 0  # 연속 수신 예외 카운터 — 끊긴 소켓 busy-loop 방지 퓨즈
     try:
         while True:
             # 프레임 수신을 루프 '안'에서 방어 — 잘못된/비-JSON/비-dict 프레임 하나가
@@ -49,16 +50,23 @@ async def ws_endpoint(websocket: WebSocket, session_id: str) -> None:
             except WebSocketDisconnect:
                 raise
             except Exception as exc:  # noqa: BLE001
-                # 살아있는 소켓의 '잘못된 프레임'(비-JSON 등)만 무시하고 계속한다.
-                # 소켓이 이미 끊김/종료 중이면 재수신해도 같은 예외가 영구 반복되어
-                # 이벤트 루프를 점유하는 busy-loop이 된다(실측: receive가 WebSocketDisconnect가
-                # 아니라 RuntimeError('WebSocket is not connected')로 나는 비정상 종료 경로).
-                # 따라서 CONNECTED가 아니면 잘못된 프레임이 아니라 종료로 보고 루프를 끝낸다.
-                if websocket.client_state != WebSocketState.CONNECTED:
-                    log.info("ws recv on %s → close: %s", websocket.client_state.name, session_id)
+                # busy-loop 방지: 소켓이 수신 가능한 CONNECTED가 아니면(끊김/종료 중)
+                # receive_json은 대기 없이 같은 RuntimeError('WebSocket is not connected')를
+                # 반복해 이벤트 루프를 점유한다(프로덕션 실측). receive_json이 검사하는 건
+                # client_state가 아니라 application_state이므로 그 값이 CONNECTED가 아니거나,
+                # 상태 판정이 빗나가도 안전하도록 연속 수신 실패가 쌓이면 루프를 끝낸다.
+                # (살아있는 소켓의 일시적 잘못된 프레임만 계속 무시 — 다음 수신은 실제 프레임 대기.)
+                recv_errors += 1
+                if (websocket.application_state != WebSocketState.CONNECTED
+                        or websocket.client_state != WebSocketState.CONNECTED
+                        or recv_errors >= 5):
+                    log.info("ws recv terminating (app=%s client=%s errs=%d): %s",
+                             websocket.application_state.name, websocket.client_state.name,
+                             recv_errors, session_id)
                     break
                 log.warning("ws bad frame ignored: %s", exc)
                 continue
+            recv_errors = 0  # 정상 수신 → 퓨즈 리셋
             if not isinstance(data, dict):  # 배열·문자열 등 비-dict 프레임 방어
                 log.warning("ws non-dict frame ignored: %s", type(data).__name__)
                 continue

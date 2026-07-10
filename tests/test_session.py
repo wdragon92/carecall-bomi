@@ -136,10 +136,13 @@ def test_ws_recv_error_on_disconnected_socket_does_not_busyloop():
         ))
 
         class FakeWS:
-            """끊긴 뒤 receive가 RuntimeError를 내는 소켓(정상 종료는 WebSocketDisconnect)."""
+            """끊긴 뒤 receive_json이 WebSocketDisconnect가 아니라 RuntimeError를 내는 소켓.
+            실측 조건 재현: receive_json이 검사하는 application_state만 DISCONNECTED로 바뀌고
+            client_state는 CONNECTED로 남는다(=client_state만 보던 초기 수정이 놓쳤던 경로)."""
 
             def __init__(self):
                 self.app = fake_app
+                self.application_state = WebSocketState.CONNECTED
                 self.client_state = WebSocketState.CONNECTED
                 self.calls = 0
 
@@ -151,7 +154,7 @@ def test_ws_recv_error_on_disconnected_socket_does_not_busyloop():
 
             async def receive_json(self):
                 self.calls += 1
-                self.client_state = WebSocketState.DISCONNECTED  # 소켓은 이미 끊김
+                self.application_state = WebSocketState.DISCONNECTED  # receive_json 가드가 보는 상태
                 raise RuntimeError('WebSocket is not connected. Need to call "accept" first.')
 
             async def close(self):
@@ -165,3 +168,50 @@ def test_ws_recv_error_on_disconnected_socket_does_not_busyloop():
     sess, fws = asyncio.run(scenario())
     assert fws.calls == 1        # 1회 시도 후 즉시 종료(무한 재시도 아님)
     assert sess.ws is None       # finally 정리로 stale 소켓 참조 해제
+
+
+def test_ws_recv_error_fuse_bounds_busyloop_even_if_state_stays_connected():
+    """상태가 CONNECTED로 남아도(상태 판정이 빗나가는 최악의 경우) 연속 수신 예외 퓨즈가
+    busy-loop을 유한하게 끊는다 — 이중 안전장치."""
+    from types import SimpleNamespace
+
+    from starlette.websockets import WebSocketState
+
+    from app.routes.ws import ws_endpoint
+
+    async def scenario():
+        store = SessionStore()
+        sess = await store.create()
+        sess.add_message("user", "이미 진행된 세션")
+        fake_app = SimpleNamespace(state=SimpleNamespace(
+            store=store,
+            providers=SimpleNamespace(modes={}),
+            settings=SimpleNamespace(greet_delay_seconds=0.0),
+        ))
+
+        class StuckWS:
+            def __init__(self):
+                self.app = fake_app
+                self.application_state = WebSocketState.CONNECTED  # 끝까지 CONNECTED(오판 상황)
+                self.client_state = WebSocketState.CONNECTED
+                self.calls = 0
+
+            async def accept(self):
+                pass
+
+            async def send_json(self, _payload):
+                pass
+
+            async def receive_json(self):
+                self.calls += 1
+                raise RuntimeError("boom")  # 매번 즉시 예외(대기 없음)
+
+            async def close(self):
+                pass
+
+        sws = StuckWS()
+        await asyncio.wait_for(ws_endpoint(sws, sess.id), timeout=3.0)
+        return sws
+
+    sws = asyncio.run(scenario())
+    assert sws.calls == 5        # 퓨즈(recv_errors >= 5)에서 종료 — 무한 아님
